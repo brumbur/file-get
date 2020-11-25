@@ -21,7 +21,6 @@ function clean {
   exit 1
 }
 
-
 # get the file details and parse the size
 function getSize() {
   local SIZE="`curl -qIL $1 2> /dev/null | awk '/Length/ {print $2}'|grep -o '[0-9]*'`"
@@ -72,16 +71,6 @@ function getFiles() {
   getNewFiles files_arr $ms
 }
 
-#Test splitness
-function test() {
-  OUT=`curl -m 2 --range 0-0 $URL 2> /dev/null`
-  case ${#OUT} in
-    0)  echo "curl error";; #Curl error
-    1)  echo ;; #OK, got a byte
-    *)  echo Server does not split...;SPLIT_NUM=1;; #Got more than asked for
-  esac
-}
-
 function calcProgress() {
   # local FNAME=$1
   # local PARTNUM=$2
@@ -104,7 +93,6 @@ function download() {
   local FILE_NAME=$3
   local FILE_SIZE=$4
   local SPLIT_SIZE=$5
-  
 
   SPLIT_NUM=$((${FILE_SIZE:-0}/$SPLIT_SIZE))
   [ $SPLIT_NUM -ne 0 ] || SPLIT_NUM=1
@@ -114,12 +102,6 @@ function download() {
 
   local CURL_RANGE_ARG="--range $START-$END"
   [ $SPLIT_NUM -eq 1 ] || CURL_RANGE_ARG=""
-
-  # echo "Downloading $FILE_NAME from: $SRC to: $DEST"
-  # echo "FILE_SIZE: $FILE_SIZE"
-  # echo "SPLIT_SIZE: $SPLIT_SIZE"
-  # echo "SPLIT_NUM: $SPLIT_NUM"
-  # echo "WRK_DIR: $WRK_DIR"
 
   local START=0
   local CHUNK=$((${FILE_SIZE:-0}/${SPLIT_NUM:-1}))
@@ -201,5 +183,3 @@ for f in ${f_arr[@]}; do
   FILE_SIZE=$(getSize "$URL/$f")
   download "$URL" "$OUT_DIR" "$f" $FILE_SIZE $SPLIT_SIZE
 done
-
-# ./file-get.sh ftp://alex:ficus5657@192.168.1.1:21/media/apps/Apple "Mon, 17 Feb 2020 20:38:04 GMT" 1
