@@ -31,6 +31,16 @@ function getNewFiles() {
     return
 }
 
+#Test splitness
+function test() {
+  OUT=`curl -m 2 --range 0-0 $URL 2> /dev/null`
+  case ${#OUT} in
+    0)  echo "curl error";; #Curl error
+    1)  echo ;; #OK, got a byte
+    *)  echo Server does not split...;SPLIT_NUM=1;; #Got more than asked for
+  esac
+}
+
 function get() {
 
   local url="$1"
