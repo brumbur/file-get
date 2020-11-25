@@ -15,8 +15,8 @@ function usage {
 function clean {
   echo "Download failed! Cleaning..."
   # kill 0
-  rm $OUT_DIR/$FILENAME.* 2> /dev/null
   rm -R $OUT_DIR/wrk 2> /dev/null
+  rm $OUT_DIR/$FILENAME.* 2> /dev/null
   exit 1
 }
 
@@ -37,9 +37,9 @@ function getSize() {
 # takes an array refference and updates it with the file names in the given directory
 function getDirectoryContent() {
   local -n arr=$1
-  local url="$2"
+  local url="$2/"
 
-  arr=($(curl -s '$url/' | sed -nr 's/(^-[ rw-].*)( *)([0-9])(.*)/\4/p' | sed -e 's/^ //g' | sed -e 's/ /\ /g'))
+  arr=($(curl -s "$url" | sed -nr 's/(^-[ rw-].*)( *)([0-9])(.*)/\4/p' | sed -e 's/^ //g' | sed -e 's/ /\ /g'))
 
   return
 }
@@ -67,7 +67,7 @@ function getNewFiles() {
     return
 }
 
-function get() {
+function getFiles() {
   local url="$1"
   local ms="$(date -d "$2" '+%s')"
   local -n files_arr=$3
@@ -92,12 +92,12 @@ function calcProgress() {
   # local SZ=$3
   # local T=$4
 
-  local GOTSIZE=$((`eval ls -l "$1".{1..$2} 2> /dev/null|awk 'BEGIN{SUM=0}{SUM=SUM+$5}END{print SUM}'`))
+  local GOTSIZE=$((`eval ls -l "$1".{1..$2} 2> /dev/null | awk 'BEGIN{SUM=0}{SUM=SUM+$5}END{print SUM}'`))
   local TIMEDIFF=$(( `date +%s` - $4 ))
   local RATE=$(( ($GOTSIZE / $TIMEDIFF)/1024 ))
   local PCT=$(( ($GOTSIZE*100) / $3 ))
 
-  echo -n "Downloading $1 in $2 parts: $(($GOTSIZE/1048576)) / $(($3/1048576)) mb @ $(($RATE)) KB/s ($PCT%).    "
+  echo "Downloading $1 in $2 parts: $(($GOTSIZE/1048576)) / $(($3/1048576)) mb @ $(($RATE)) KB/s ($PCT%).    "
 
   return
 }
@@ -108,6 +108,7 @@ function download() {
   local FILE_NAME=$3
   local FILE_SIZE=$4
   local SPLIT_SIZE=$5
+  
 
   SPLIT_NUM=$((${FILE_SIZE:-0}/$SPLIT_SIZE))
   [ $SPLIT_NUM -ne 0 ] || SPLIT_NUM=1
@@ -115,11 +116,14 @@ function download() {
   WRK_DIR="$DEST/wrk"
   [ -f "$WRK_DIR" ] || `mkdir -m 755 "$WRK_DIR"`
 
-  echo "Downloading $FILE_NAME from: $SRC to: $DEST"
-  echo "FILE_SIZE: $FILE_SIZE"
-  echo "SPLIT_SIZE: $SPLIT_SIZE"
-  echo "SPLIT_NUM: $SPLIT_NUM"
-  echo "WRK_DIR: $WRK_DIR"
+  local CURL_RANGE_ARG="--range $START-$END"
+  [ $SPLIT_NUM -eq 1 ] || CURL_RANGE_ARG=""
+
+  # echo "Downloading $FILE_NAME from: $SRC to: $DEST"
+  # echo "FILE_SIZE: $FILE_SIZE"
+  # echo "SPLIT_SIZE: $SPLIT_SIZE"
+  # echo "SPLIT_NUM: $SPLIT_NUM"
+  # echo "WRK_DIR: $WRK_DIR"
 
   local START=0
   local CHUNK=$((${FILE_SIZE:-0}/${SPLIT_NUM:-1}))
@@ -127,7 +131,7 @@ function download() {
 
   #Invoke curls
   for PART in `eval echo {1..$SPLIT_NUM}`;do
-    echo "curl --ftp-pasv -o $WRK_DIR/$FILE_NAME.$PART --range $START-$END $SRC/$FILE_NAME"
+    # echo "curl --ftp-pasv -o $WRK_DIR/$FILE_NAME.$PART --range $START-$END $SRC/$FILE_NAME"
     curl --ftp-pasv -o "$WRK_DIR/$FILE_NAME.$PART" --range $START-$END "$SRC/$FILE_NAME" 2> /dev/null &
     START=$(($START+$CHUNK+1))
     END=$(($START+$CHUNK))
@@ -136,13 +140,13 @@ function download() {
   #Wait for all parts to complete while spewing progress
   TIME=$((`date +%s`-1))
   while jobs | grep -q Running ; do
-    # echo $(calcProgress "$WRK_DIR/$FILE_NAME" $SPLIT_NUM $FILE_SIZE $TIME)
-    tput ech ${#FILE_SIZE}
-    tput cub 1000
+    echo -n $(calcProgress "$WRK_DIR/$FILE_NAME" $SPLIT_NUM $FILE_SIZE $TIME)
+    tput ech ${#FILE_SIZE} # erase the last reported size value
+    tput cub 1000 # move 1000 chars left
     sleep 1
   done
 
-  # echo $(calcProgress "$WRK_DIR/$FILE_NAME" $SPLIT_NUM $FILE_SIZE $TIME)
+  echo $(calcProgress "$WRK_DIR/$FILE_NAME" $SPLIT_NUM $FILE_SIZE $TIME)
 
   #Join all the parts
   eval cat "$WRK_DIR/$FILE_NAME".{1..$SPLIT_NUM} > "$DEST/$FILE_NAME"
@@ -163,33 +167,26 @@ function download() {
 ###########################
 # main
 ###########################
-FILENAME="AppleSoftwareUpdate.msi"
+
 downloader_output_dir="/home/alex/dev/file-get/td"
 OUT_DIR=${downloader_output_dir:-"/tmp"}
 
 URL=$1
 cutoff=$2
 
-# declare -a f_arr
-# getDirectoryContent f_arr $URL
-# get "$1" "$2" f_arr
-# echo "Found ${#f_arr[@]} files"
-
-SPLIT_SIZE=${3:-${downloader_chunk_size:-128}}
-SPLIT_SIZE=$(($SPLIT_SIZE * 1024 * 1024)) # convert to Mbs
-echo "SPLIT_SIZE: $SPLIT_SIZE"
-
-FILE_SIZE=$(getSize "$URL/$FILENAME")
-echo "FILE_SIZE: $FILE_SIZE"
+declare -a f_arr
+getFiles "$1" "$2" f_arr
+echo "Found ${#f_arr[@]} files"
 
 #Trap ctrl-c
 trap clean SIGINT SIGTERM
 
-# local SRC="$1"
-# local DEST="$2"
-# local FILE_NAME=$3
-# local FILE_SIZE=$4
-# local SPLIT_SIZE=$5
-download "$URL" "$OUT_DIR" "$FILENAME" $FILE_SIZE $SPLIT_SIZE
+SPLIT_SIZE=${3:-${downloader_chunk_size:-128}}
+SPLIT_SIZE=$(($SPLIT_SIZE * 1024 * 1024)) # convert to Mbs
+
+for f in ${f_arr[@]}; do
+  FILE_SIZE=$(getSize "$URL/$f")
+  download "$URL" "$OUT_DIR" "$f" $FILE_SIZE $SPLIT_SIZE
+done
 
 # ./file-get.sh ftp://alex:ficus5657@192.168.1.1:21/media/apps/Apple "Mon, 17 Feb 2020 20:38:04 GMT" 1
