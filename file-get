@@ -7,7 +7,8 @@
 
 # monitor given remote directory and download new files to the target directory
 function usage {
-  echo -e "Usage:\n\t`basename $0` <url> [chunk size (default: 128MB)] [sourcedir (default: autodetect)] [targetdir (default: autodetect)]"
+  echo -e "Usage:\n\t`basename $0` [source dir] [target dir] [cutoff time] [chunk size (default: 128MB)]"
+  echo -e "Example:\n\t `basename $0` ftp://pesho:mzprx@192.168.1.1:21/remote/directory \"Mon, 17 Feb 2020 20:38:04 GMT\""
   exit 1
 }
 
@@ -28,11 +29,6 @@ function getSize() {
   echo $SIZE
   return
 }
-
-
-# function download() {
-
-# }
 
 # takes an array refference and updates it with the file names in the given directory
 function getDirectoryContent() {
@@ -173,6 +169,23 @@ OUT_DIR=${downloader_output_dir:-"/tmp"}
 
 URL=$1
 cutoff=$2
+
+#Check parameters
+if [ ! "$1" ] ; then
+  echo "source url with the directory is required"
+  usage
+fi
+
+if [ ! "$2" ] ; then
+  echo "target dir is required"
+  usage
+fi
+
+if [ ! "$3" ] ; then
+  echo "Cut-off time is required"
+  usage
+fi
+
 
 declare -a f_arr
 getFiles "$1" "$2" f_arr
