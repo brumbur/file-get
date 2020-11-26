@@ -164,13 +164,13 @@ trap clean SIGINT SIGTERM
 
 echo "CUT_OFF_TIME $CUT_OFF_TIME"
 
-# declare -a files
-# getDirectoryContent files $URL
-# getNewFiles files $URL $CUT_OFF_TIME
-# echo "Found ${#files[@]} files"
+declare -a files
+getDirectoryContent files $URL
+getNewFiles files $URL $CUT_OFF_TIME
+echo "Found ${#files[@]} files"
 
-# for f in ${files[@]}; do
-#   FILE_SIZE=$(getSize "$URL/$f")
-#   echo "Downloading $f with size $FILE_SIZE"
-#   download "$URL" "$OUT_DIR" "$f" $FILE_SIZE $SPLIT_SIZE
-# done
+for f in ${files[@]}; do
+  FILE_SIZE=$(getSize "$URL/$f")
+  echo "Downloading $f with size $FILE_SIZE"
+  download "$URL" "$OUT_DIR" "$f" $FILE_SIZE $SPLIT_SIZE
+done
