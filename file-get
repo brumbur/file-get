@@ -139,7 +139,7 @@ function download() {
 
 URL=$1
 OUT_DIR=${2:-OUT_DIR-"/tmp"}
-CUT_OFF_TIME=$(date -d $3 '+%s') # time in epoch miliseconds
+CUT_OFF_TIME="$(date -d "$3" '+%s')" # time in epoch miliseconds
 SPLIT_SIZE=${4:-128}
 SPLIT_SIZE=$(($SPLIT_SIZE * 1024 * 1024)) # convert to mb
 
@@ -162,13 +162,15 @@ fi
 #Trap ctrl-c
 trap clean SIGINT SIGTERM
 
-declare -a files
-getDirectoryContent files $URL
-getNewFiles files $URL $CUT_OFF_TIME
-echo "Found ${#files[@]} files"
+echo "CUT_OFF_TIME $CUT_OFF_TIME"
 
-for f in ${files[@]}; do
-  FILE_SIZE=$(getSize "$URL/$f")
-  echo "Downloading $f with size $FILE_SIZE"
-  download "$URL" "$OUT_DIR" "$f" $FILE_SIZE $SPLIT_SIZE
-done
+# declare -a files
+# getDirectoryContent files $URL
+# getNewFiles files $URL $CUT_OFF_TIME
+# echo "Found ${#files[@]} files"
+
+# for f in ${files[@]}; do
+#   FILE_SIZE=$(getSize "$URL/$f")
+#   echo "Downloading $f with size $FILE_SIZE"
+#   download "$URL" "$OUT_DIR" "$f" $FILE_SIZE $SPLIT_SIZE
+# done
