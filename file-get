@@ -35,14 +35,12 @@ function getDirectoryContent() {
   local url="$2/"
 
   arr=($(curl -s "$url" | sed -nr 's/(^-[ rw-].*)( *)([0-9])(.*)/\4/p' | sed -e 's/^ //g' | sed -e 's/ /\ /g'))
-
   return
 }
 
 # takes the complete URL as argument and returns the last modified time
 function getLastModifiedDate() {
-    local filename=$1
-    local dt=`curl -I "$url/$filename" 2>&1 | awk '/Last-Modified:/ {sub("\r",""); print  $2,$3,$4,$5,$6,$7}'`
+    local dt=`curl -I "$1" 2>&1 | awk '/Last-Modified:/ {sub("\r",""); print  $2,$3,$4,$5,$6,$7}'`
     local ms="$(date -d "${dt}" '+%s')" # convert to ms
     echo "$ms"
     return
@@ -51,24 +49,17 @@ function getLastModifiedDate() {
 # filters out any files that are older than the cutoff time
 function getNewFiles() {
     local -n arr=$1
-    local cutoff=$2
+    local url=$2
+    local cutoff=$3
 
     for f in ${arr[@]}; do
-        local lmd=$(getLastModifiedDate "$f")
+        local lmd=$(getLastModifiedDate "$url/$f")
         if [ $cutoff -gt $lmd ]; then
+            echo "$f is old, skipping it"
             arr=("${arr[@]/$f}") # remove old file
         fi
     done
     return
-}
-
-function getFiles() {
-  local url="$1"
-  local ms="$(date -d "$2" '+%s')"
-  local -n files_arr=$3
-
-  getDirectoryContent f_arr $url
-  getNewFiles files_arr $ms
 }
 
 function calcProgress() {
@@ -146,11 +137,11 @@ function download() {
 # main
 ###########################
 
-downloader_output_dir="/home/alex/dev/file-get/td"
-OUT_DIR=${downloader_output_dir:-"/tmp"}
-
 URL=$1
-cutoff=$2
+OUT_DIR=${2:-OUT_DIR-"/tmp"}
+CUT_OFF_TIME=$(date -d "$3" '+%s') # time in epoch miliseconds
+SPLIT_SIZE=${4:-128}
+SPLIT_SIZE=$(($SPLIT_SIZE * 1024 * 1024)) # convert to mb
 
 #Check parameters
 if [ ! "$1" ] ; then
@@ -168,18 +159,16 @@ if [ ! "$3" ] ; then
   usage
 fi
 
-
-declare -a f_arr
-getFiles "$1" "$2" f_arr
-echo "Found ${#f_arr[@]} files"
-
 #Trap ctrl-c
 trap clean SIGINT SIGTERM
 
-SPLIT_SIZE=${3:-${downloader_chunk_size:-128}}
-SPLIT_SIZE=$(($SPLIT_SIZE * 1024 * 1024)) # convert to Mbs
+declare -a files
+getDirectoryContent files $URL
+getNewFiles files $URL $(date -d "$CUT_OFF_TIME" '+%s')
+echo "Found ${#files[@]} files"
 
-for f in ${f_arr[@]}; do
+for f in ${files[@]}; do
   FILE_SIZE=$(getSize "$URL/$f")
+  echo "Downloading $f with size $FILE_SIZE"
   download "$URL" "$OUT_DIR" "$f" $FILE_SIZE $SPLIT_SIZE
 done
