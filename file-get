@@ -56,7 +56,7 @@ function getNewFiles() {
     for f in ${arr[@]}; do
         local lmd=$(getLastModifiedDate "$url/$f")
         if [ $cutoff -gt $lmd ]; then
-            echo "$f is old, skipping it"
+            echo "$f is old, skipping it"git c
             arr=("${arr[@]/$f}") # remove old file
         fi
     done
@@ -143,6 +143,11 @@ OUT_DIR=${2:-OUT_DIR-"/tmp"}
 CUT_OFF_TIME="$(date -d "$3" '+%s')" # time in epoch miliseconds
 SPLIT_SIZE=${4:-128}
 SPLIT_SIZE=$(($SPLIT_SIZE * 1024 * 1024)) # convert to mb
+
+echo $URL
+echo $OUT_DIR
+echo $CUT_OFF_TIME
+echo $SPLIT_SIZE
 
 #Check parameters
 if [ ! "$1" ] ; then
