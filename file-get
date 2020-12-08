@@ -18,9 +18,9 @@
 
 # monitor given remote directory and download new files to the target directory
 function usage {
-  echo -e "Usage:\n\t`basename $0` [source url] [target dir] [cutoff time] [chunk size (default: 128MB)]"
-  echo -e "Example:\n\t `basename $0` ftp://pesho:mzprx@192.168.1.1:21/remote/directory /tmp \"Mon, 17 Feb 2020 20:38:04 GMT\""
-  echo -e "\n\t `basename $0` ftp://pesho:mzprx@192.168.1.1:21/remote/directory /tmp yesterday"
+  echo -e "Usage:\n\t`basename $0` [source url] [target dir] [delete remote file {default: n}]"
+  echo -e "Example:\n\t `basename $0` ftp://pesho:mzprx@192.168.1.1:21/remote/directory /tmp"
+  echo -e "\n\t `basename $0` ftp://pesho:mzprx@192.168.1.1:21/remote/directory /tmp y"
   exit 1
 }
 
@@ -45,7 +45,6 @@ function getSize() {
 function getDirectoryContent() {
   local -n arr=$1
   local url="$2/"
-  echo "url $2"
   local response=`curl -s "$url"`
 
   if [ $? -eq 0 ]
@@ -84,12 +83,14 @@ function getNewFiles() {
     local -n arr=$1
     local url=$2
     local cutoff=$3
-
+    print "Checking location" $url
     for f in ${arr[@]}; do
         local lmd=$(getSourceLastModifiedDate "$url/$f")
-        if [ $cutoff -gt $lmd ]; then
-            echo "$f is old, skipping it"git c
+        if [ $cutoff -ge $lmd ]; then
+            print "\t(-) $f is old" "skipped"
             arr=("${arr[@]/$f}") # remove old file
+        else
+          print "\t(+) $f is newer" "downloading"
         fi
     done
     return
@@ -122,7 +123,7 @@ function download() {
   WRK_DIR="$DEST/wrk"
   [ -f "$WRK_DIR" ] || `mkdir -m 755 "$WRK_DIR"`
 
-  curl --ftp-pasv -o "${WRK_DIR/$FILE_NAME}.1" "$SRC/$FILE_NAME" 2> /dev/null &
+  curl -R --ftp-pasv -o "${WRK_DIR/$FILE_NAME}.1" "$SRC/$FILE_NAME" 2> /dev/null &
   if [ $? -eq 0 ]
   then
     echo "Download started"
@@ -148,9 +149,7 @@ function download() {
   then
     echo "Download completed! Check file in $DEST"
     local file_path=$(echo ${SRC} | cut -d@ -f2 | cut -d/ -f2- | cut -d? -f1)
-    echo "curl $SRC -Q\"DELE $file_path/$FILE_NAME\""
-    #curl ftp://alex:ficus5657@192.168.1.1/ftp/root/alex -Q"DELE /ftp/root/alex/New.Text.Document.txt"
-    [ $DELETE_REMOTE_FILE = "y" ] && `curl $SRC -Q"DELE $file_path/$FILE_NAME"`
+    [ $DELETE_REMOTE_FILE = "y" ] && `curl $SRC -Q"DELE $file_path/$FILE_NAME" 2> /dev/null`
   else
     echo "Could not download file: $?" >&2
     clean
@@ -210,7 +209,7 @@ function downloadInChunks() {
 }
 
 function print() {
-  echo "$1 [$2]"
+  echo -e "$1 [$2]"
 }
 
 
@@ -236,14 +235,9 @@ CUT_OFF_TIME="$(date -d "$4" '+%s')" # time in epoch milliseconds
 SPLIT_SIZE=${5:-128}
 SPLIT_SIZE=$(($SPLIT_SIZE * 1024 * 1024)) # convert to mb
 
-echo $URL
-echo $OUT_DIR
-echo $CUT_OFF_TIME
-echo $SPLIT_SIZE
-
 #Check parameters
 if [ ! "$1" ] ; then
-  echo "source url with the directory is required"
+  echo "source url with user credentials and the directory is required"
   usage
 fi
 
@@ -252,11 +246,11 @@ if [ ! "$2" ] ; then
   usage
 fi
 
-if [ ! "$3" ] ; then
+if [ ! "$4" ] ; then
   # use the timestamp of the last file we downloaded or if we cant find one assume a week from now
-  LATEST=$(getDestinationLastModifiedDate $2)
+  LATEST=$(getDestinationLastModifiedDate $OUT_DIR)
   CUT_OFF_TIME=${LATEST:-`date --date 'last week' '+%s'`}
-  print "Using last download time as cutoff marker" $CUT_OFF_TIME
+  print "Using last download time as cutoff marker" "$(date -d @$CUT_OFF_TIME)"
 fi
 
 # add verbose mode
@@ -282,7 +276,7 @@ for f in ${files[@]}; do
   download "$URL" "$OUT_DIR" "$f" $FILE_SIZE $SPLIT_SIZE
 done
 
-rm -R "$OUT_DIR/wrk"
+[ -f "$WRK_DIR" ] && rm -R "$OUT_DIR/wrk"
 
 # ./file-get ftp://alex:ficus5657@192.168.1.1/ftp/root/alex/ ./td
 # curl ftp://alex:ficus5657@192.168.1.1/ftp/root/alex/New.Text.Document.txt -Q"DELE ftp://alex:ficus5657@192.168.1.1/ftp/root/alex/New.Text.Document.txt"
