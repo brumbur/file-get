@@ -1,6 +1,17 @@
 #!/bin/bash
 
 
+#  1 - от къде да сваля
+#  2 - къде да качва  (temp) или в папка на друга машина в мрежата
+#  3 - ключ дали да трие сваленото (y/n)
+#
+#  - време не ни трябва, но разбира се не трябва да сваля файл 2 пъти освен ако не е нов файл със същото име
+#  - възможнжст за стартиране на повече от един скрипт едновремено
+#  - като екстра за напреднали - да проверява за наличието на стринг в името на файла. Например " BG60" или "BG 60" или "BG_60". Ако има такъв стринг - да качи файла в друга папка (temp1)
+#
+#  $ ./file-get ftp://pesho:mzprx@192.168.1.1:21/remote/directory ./temp  y/n ("BG60","BG 60","BG_60") ./temp1
+
+
 ###########################
 # functions
 ###########################
@@ -30,22 +41,43 @@ function getSize() {
   return
 }
 
-# takes an array refference and updates it with the file names in the given directory
+# takes an array reference and updates it with the file names in the given directory
 function getDirectoryContent() {
   local -n arr=$1
   local url="$2/"
+  echo "url $2"
+  local response=`curl -s "$url"`
+
+  if [ $? -eq 0 ]
+  then
+    echo ""
+  else
+    echo "ERROR: $?" >&2
+    clean
+  fi
 
   arr=($(curl -s "$url" | sed -nr 's/(^-[ rw-].*)( *)([0-9])(.*)/\4/p' | sed -e 's/^ //g' | sed -e 's/ /\ /g'))
+
   return
 }
 
 # takes the complete URL as argument and returns the last modified time
-function getLastModifiedDate() {
+function getSourceLastModifiedDate() {
     local dt=`curl -I "$1" 2>&1 | awk '/Last-Modified:/ {sub("\r",""); print  $2,$3,$4,$5,$6,$7}'`
     local ms="$(date -d "${dt}" '+%s')" # convert to ms
     echo "$ms"
     return
 }
+
+function getDestinationLastModifiedDate() {
+    local destDir=$1
+    local last=`find $destDir -type f -printf '%T@ %p\n' | sort -n | tail -1`
+    file=(${last// / })
+    echo $(date -d "@${file[0]}" '+%s')
+    return
+}
+
+find . -type f -printf '%T@ %p\n' | sort -n | tail -1 | cut -f2- -d" "
 
 # filters out any files that are older than the cutoff time
 function getNewFiles() {
@@ -54,9 +86,9 @@ function getNewFiles() {
     local cutoff=$3
 
     for f in ${arr[@]}; do
-        local lmd=$(getLastModifiedDate "$url/$f")
+        local lmd=$(getSourceLastModifiedDate "$url/$f")
         if [ $cutoff -gt $lmd ]; then
-            echo "$f is old, skipping it"git c
+            echo "$f is old, skipping it"
             arr=("${arr[@]/$f}") # remove old file
         fi
     done
@@ -83,6 +115,45 @@ function download() {
   local SRC="$1"
   local DEST="$2"
   local FILE_NAME=$3
+  local SPLIT_NUM=1
+
+  curl --ftp-pasv -o "$WRK_DIR/$FILE_NAME.1" "$SRC/$FILE_NAME" 2> /dev/null &
+  if [ $? -eq 0 ]
+  then
+    echo "Download started"
+    rm -R $WRK_DIR
+  else
+    echo "Could not download file: $?" >&2
+    clean
+  fi
+
+  # Wait for the job to complete while showing progress
+  TIME=$((`date +%s`-1))
+  while jobs | grep -q Running ; do
+    echo -n $(calcProgress "$WRK_DIR/$FILE_NAME" $SPLIT_NUM $FILE_SIZE $TIME)
+    tput ech ${#FILE_SIZE} # erase the last reported size value
+    tput cub 1000 # move 1000 chars left
+    sleep 1
+  done
+
+  echo $(calcProgress "$WRK_DIR/$FILE_NAME" $SPLIT_NUM $FILE_SIZE $TIME)
+
+  eval move "$WRK_DIR/$FILE_NAME".1 > "$DEST/$FILE_NAME"
+
+  if [ $? -eq 0 ]
+  then
+    echo "Download completed! Check file $DEST"
+    rm -R $WRK_DIR
+  else
+    echo "Could not download file: $?" >&2
+    clean
+  fi
+}
+
+function downloadInChunks() {
+  local SRC="$1"
+  local DEST="$2"
+  local FILE_NAME=$3
   local FILE_SIZE=$4
   local SPLIT_SIZE=$5
 
@@ -101,7 +172,6 @@ function download() {
 
   #Invoke curls
   for PART in `eval echo {1..$SPLIT_NUM}`;do
-    # echo "curl --ftp-pasv -o $WRK_DIR/$FILE_NAME.$PART --range $START-$END $SRC/$FILE_NAME"
     curl --ftp-pasv -o "$WRK_DIR/$FILE_NAME.$PART" --range $START-$END "$SRC/$FILE_NAME" 2> /dev/null &
     START=$(($START+$CHUNK+1))
     END=$(($START+$CHUNK))
@@ -133,6 +203,22 @@ function download() {
   return
 }
 
+function print() {
+  echo "$1 [$2]"
+}
+
+
+function check() {
+  if [ $1 -eq 0 ]
+    then
+      echo "Download started"
+      rm -R $WRK_DIR
+    else
+      echo "Could not download file: $1" >&2
+      clean
+  fi
+}
+
 
 ###########################
 # main
@@ -140,14 +226,9 @@ function download() {
 
 URL=$1
 OUT_DIR=${2:-OUT_DIR-"/tmp"}
-CUT_OFF_TIME="$(date -d "$3" '+%s')" # time in epoch miliseconds
+CUT_OFF_TIME="$(date -d "$3" '+%s')" # time in epoch milliseconds
 SPLIT_SIZE=${4:-128}
 SPLIT_SIZE=$(($SPLIT_SIZE * 1024 * 1024)) # convert to mb
-
-echo $URL
-echo $OUT_DIR
-echo $CUT_OFF_TIME
-echo $SPLIT_SIZE
 
 #Check parameters
 if [ ! "$1" ] ; then
@@ -161,22 +242,29 @@ if [ ! "$2" ] ; then
 fi
 
 if [ ! "$3" ] ; then
-  echo "Cut-off time is required"
-  usage
+  # use the timestamp of the last file we downloaded or if we cant find one assume a week from now
+  LATEST=$(getDestinationLastModifiedDate $2)
+  CUT_OFF_TIME=${LATEST:-`date --date 'last week' '+%s'`}
+  print "Using last download time as cutoff marker" $CUT_OFF_TIME
 fi
+
+# add verbose mode
+print "URL" $URL
+print "OUT_DIR" $OUT_DIR
+print "CUT_OFF_TIME" "$(date -d "@$CUT_OFF_TIME")"
+#print "SPLIT_SIZE" $SPLIT_SIZE
 
 #Trap ctrl-c
 trap clean SIGINT SIGTERM
 
-echo "CUT_OFF_TIME $CUT_OFF_TIME"
-
 declare -a files
 getDirectoryContent files $URL
 getNewFiles files $URL $CUT_OFF_TIME
-echo "Found ${#files[@]} files"
 
 for f in ${files[@]}; do
   FILE_SIZE=$(getSize "$URL/$f")
   echo "Downloading $f with size $FILE_SIZE"
-  download "$URL" "$OUT_DIR" "$f" $FILE_SIZE $SPLIT_SIZE
+  downloadInChunks "$URL" "$OUT_DIR" "$f" $FILE_SIZE $SPLIT_SIZE
 done
+
+# ./file-get ftp://alex:ficus5657@192.168.1.1/ftp/root/alex/ ./td
