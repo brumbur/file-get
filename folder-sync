@@ -1,15 +1,14 @@
 #!/bin/bash
 
-
+#  Done:
 #  1 - от къде да сваля
 #  2 - къде да качва  (temp) или в папка на друга машина в мрежата
 #  3 - ключ дали да трие сваленото (y/n)
+#  4 - възможнжст за стартиране на повече от един скрипт едновремено
 #
-#  - време не ни трябва, но разбира се не трябва да сваля файл 2 пъти освен ако не е нов файл със същото име
-#  - възможнжст за стартиране на повече от един скрипт едновремено
+#  To do:
 #  - като екстра за напреднали - да проверява за наличието на стринг в името на файла. Например " BG60" или "BG 60" или "BG_60". Ако има такъв стринг - да качи файла в друга папка (temp1)
-#
-#  $ ./file-get ftp://pesho:mzprx@192.168.1.1:21/remote/directory ./temp  y/n ("BG60","BG 60","BG_60") ./temp1
+#  $ ./folder-sync ftp://pesho:mzprx@192.168.1.1:21/remote/directory ./temp  y/n ("BG60","BG 60","BG_60") ./temp1
 
 
 ###########################
@@ -27,9 +26,8 @@ function usage {
 #Cleanup on kill
 function clean {
   echo "Download failed! Cleaning..."
-  # kill 0
-  rm -R $OUT_DIR/wrk 2> /dev/null
-  rm $OUT_DIR/$FILENAME.* 2> /dev/null
+  kill 0
+  rm -Rf $OUT_DIR/wrk
   exit 1
 }
 
@@ -71,12 +69,29 @@ function getSourceLastModifiedDate() {
 function getDestinationLastModifiedDate() {
     local destDir=$1
     local last=`find $destDir -type f -printf '%T@ %p\n' | sort -n | tail -1`
+
+    [ -n "$last" ] || return
+
     file=(${last// / })
     echo $(date -d "@${file[0]}" '+%s')
     return
 }
 
-find . -type f -printf '%T@ %p\n' | sort -n | tail -1 | cut -f2- -d" "
+function getTimeMarker() {
+    local destDir=$1
+    local last=`find $destDir -type f -printf '%T@ %p\n' | sort -n | tail -1`
+    local marker
+
+    if [ -n "$last" ]; then
+      marker=`date '+%s'` #current time
+    else
+      file=(${last// / })
+      marker=$(date -d "@${file[0]}" '+%s') # latest download time
+    fi
+
+    echo $marker
+    return
+}
 
 # filters out any files that are older than the cutoff time
 function getNewFiles() {
@@ -122,7 +137,7 @@ function download() {
   local SPLIT_NUM=1
 
   WRK_DIR="$DEST/wrk"
-  [ -f "$WRK_DIR" ] || `mkdir -m 755 "$WRK_DIR"`
+  `mkdir -p -m 755 "$WRK_DIR"`
 
   curl -R --ftp-pasv -o "${WRK_DIR}/${NAME}.1" "$SRC/$NAME" 2> /dev/null &
 
@@ -154,6 +169,17 @@ function print() {
   echo -e "$1 [$2]"
 }
 
+# cygwin needs to have procps-ng package to support pgrep (https://cygwin.com/packages/summary/procps-ng.html)
+function getcpid() {
+    cpids=`pgrep -P $1|xargs`
+
+    for cpid in $cpids;
+    do
+        echo "$cpid"
+        getcpid $cpid
+    done
+}
+
 ###########################
 # main
 ###########################
@@ -162,6 +188,7 @@ URL=$1
 OUT_DIR=${2:-"/tmp"}
 DELETE_REMOTE_FILE=${3:-"n"}
 CUT_OFF_TIME="$(date -d "$4" '+%s')" # time in epoch milliseconds
+SLEEP="60"
 
 #Check parameters
 if [ ! "$1" ] ; then
@@ -174,12 +201,8 @@ if [ ! "$2" ] ; then
   usage
 fi
 
-if [ ! "$4" ] ; then
-  # use the timestamp of the last file we downloaded or if we cant find one assume from now
-  LATEST=$(getDestinationLastModifiedDate $OUT_DIR)
-  CUT_OFF_TIME=${LATEST:-`date '+%s'`}
-  print "Using last download time as cutoff marker" "$(date -d @$CUT_OFF_TIME)"
-fi
+# use the timestamp of the last file we downloaded or if we cant find any, assume from now
+CUT_OFF_TIME=$(getTimeMarker $OUT_DIR)
 
 # add verbose mode
 print "URL" $URL
@@ -187,17 +210,37 @@ print "OUT_DIR" $OUT_DIR
 print "DELETE_REMOTE_FILE" $DELETE_REMOTE_FILE
 print "CUT_OFF_TIME" "$(date -d "@$CUT_OFF_TIME")"
 
-#Trap ctrl-c
+#Trap
 trap clean SIGINT SIGTERM
+trap "exit" INT TERM ERR
+trap "kill 0" EXIT
 
 declare -a files
-getDirectoryContent files $URL
-getNewFiles files $URL $CUT_OFF_TIME
 
-for NAME in ${files[@]}; do
-  FILE_SIZE=$(getSize "$URL/$f")
-  echo "Downloading $f with size $FILE_SIZE"
-  download "$URL" "$OUT_DIR" "$NAME" $FILE_SIZE
-done
+# background loop
+while /bin/true; do
+  CUT_OFF_TIME=$(getTimeMarker $OUT_DIR)
+  print "Checking for new files as off" "$(date -d @$CUT_OFF_TIME)"
+  getDirectoryContent files $URL
+  getNewFiles files $URL $CUT_OFF_TIME
 
-[ ! -f "$WRK_DIR" ] || rm -R "$OUT_DIR/wrk"
+  for NAME in ${files[@]}; do
+    FILE_SIZE=$(getSize "$URL/$f")
+    echo "Downloading $NAME with size $FILE_SIZE"
+    download "$URL" "$OUT_DIR" "$NAME" $FILE_SIZE
+  done
+
+  rm -Rf "$OUT_DIR/wrk"
+  sleep $SLEEP
+done &
+
+# cygwin needs to have procps-ng package to support pgrep (https://cygwin.com/packages/summary/procps-ng.html)
+#echo "$BASHPID Started the job with PID $(getcpid $BASHPID)"
+
+# cygwin does not support ps -x
+#echo "PPID `ps -axf | grep $BASHPID`"
+
+echo "Parent PID [$BASHPID] will wait on the background job"
+echo "To STOP use Ctrl-C"
+
+wait
