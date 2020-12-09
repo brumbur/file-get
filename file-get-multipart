@@ -117,42 +117,112 @@ function calcProgress() {
 function download() {
   local SRC="$1"
   local DEST="$2"
-  local NAME="$3"
-  local SIZE=$4
+  local FILE_NAME=$3
   local SPLIT_NUM=1
 
   WRK_DIR="$DEST/wrk"
   [ -f "$WRK_DIR" ] || `mkdir -m 755 "$WRK_DIR"`
 
-  curl -R --ftp-pasv -o "${WRK_DIR}/${NAME}.1" "$SRC/$NAME" 2> /dev/null &
+  curl -R --ftp-pasv -o "${WRK_DIR/$FILE_NAME}.1" "$SRC/$FILE_NAME" 2> /dev/null &
+  if [ $? -eq 0 ]
+  then
+    echo "Download started"
+  else
+    echo "Could not download file: $?" >&2
+    clean
+  fi
 
   # Wait for the job to complete while showing progress
   TIME=$((`date +%s`-1))
   while jobs | grep -q Running ; do
-    echo -n $(calcProgress "${WRK_DIR}/${NAME}.1" $SPLIT_NUM $SIZE $TIME)
-    tput ech ${#SIZE} # erase the last reported size value
+    echo -n $(calcProgress "${WRK_DIR/$FILE_NAME}.1" $SPLIT_NUM $FILE_SIZE $TIME)
+    tput ech ${#FILE_SIZE} # erase the last reported size value
     tput cub 1000 # move 1000 chars left
     sleep 1
   done
 
-  echo $(calcProgress "${WRK_DIR}/${NAME}.1" $SPLIT_NUM $SIZE $TIME)
+  echo $(calcProgress "${WRK_DIR/$FILE_NAME}.1" $SPLIT_NUM $FILE_SIZE $TIME)
 
-  `mv "${WRK_DIR}/${NAME}.1" "$DEST/$NAME"`
+  eval mv "${WRK_DIR/$FILE_NAME}.1" "$DEST/$FILE_NAME"
 
   if [ $? -eq 0 ]
   then
     echo "Download completed! Check file in $DEST"
     local file_path=$(echo ${SRC} | cut -d@ -f2 | cut -d/ -f2- | cut -d? -f1)
-    [ $DELETE_REMOTE_FILE = "y" ] && `curl $SRC -Q"DELE $file_path/$NAME" 2> /dev/null`
+    [ $DELETE_REMOTE_FILE = "y" ] && `curl $SRC -Q"DELE $file_path/$FILE_NAME" 2> /dev/null`
   else
     echo "Could not download file: $?" >&2
     clean
   fi
 }
 
+function downloadInChunks() {
+  local SRC="$1"
+  local DEST="$2"
+  local FILE_NAME=$3
+  local FILE_SIZE=$4
+  local SPLIT_SIZE=$5
+
+  SPLIT_NUM=$((${FILE_SIZE:-0}/$SPLIT_SIZE))
+  [ $SPLIT_NUM -ne 0 ] || SPLIT_NUM=1
+
+  WRK_DIR="$DEST/wrk"
+  [ -f "$WRK_DIR" ] || `mkdir -m 755 "$WRK_DIR"`
+
+  local CURL_RANGE_ARG="--range $START-$END"
+  [ $SPLIT_NUM -eq 1 ] || CURL_RANGE_ARG=""
+
+  local START=0
+  local CHUNK=$((${FILE_SIZE:-0}/${SPLIT_NUM:-1}))
+  local END=$CHUNK
+
+  #Invoke curls
+  for PART in `eval echo {1..$SPLIT_NUM}`;do
+    curl --ftp-pasv -o "$WRK_DIR/$FILE_NAME.$PART" --range $START-$END "$SRC/$FILE_NAME" 2> /dev/null &
+    START=$(($START+$CHUNK+1))
+    END=$(($START+$CHUNK))
+  done
+
+  #Wait for all parts to complete while spewing progress
+  TIME=$((`date +%s`-1))
+  while jobs | grep -q Running ; do
+    echo -n $(calcProgress "$WRK_DIR/$FILE_NAME" $SPLIT_NUM $FILE_SIZE $TIME)
+    tput ech ${#FILE_SIZE} # erase the last reported size value
+    tput cub 1000 # move 1000 chars left
+    sleep 1
+  done
+
+  echo $(calcProgress "$WRK_DIR/$FILE_NAME" $SPLIT_NUM $FILE_SIZE $TIME)
+
+  #Join all the parts
+  eval cat "$WRK_DIR/$FILE_NAME".{1..$SPLIT_NUM} > "$DEST/$FILE_NAME"
+
+  if [ $? -eq 0 ]
+  then
+    echo "Download completed! Check file $DEST"
+  else
+    echo "Could not download file: $?" >&2
+    clean
+  fi
+
+  return
+}
+
 function print() {
   echo -e "$1 [$2]"
 }
+
+
+function check() {
+  if [ $1 -eq 0 ]
+    then
+      echo "Download started"
+    else
+      echo "Could not download file: $1" >&2
+      clean
+  fi
+}
+
 
 ###########################
 # main
@@ -162,6 +232,8 @@ URL=$1
 OUT_DIR=${2:-"/tmp"}
 DELETE_REMOTE_FILE=${3:-"n"}
 CUT_OFF_TIME="$(date -d "$4" '+%s')" # time in epoch milliseconds
+SPLIT_SIZE=${5:-128}
+SPLIT_SIZE=$(($SPLIT_SIZE * 1024 * 1024)) # convert to mb
 
 #Check parameters
 if [ ! "$1" ] ; then
@@ -186,6 +258,9 @@ print "URL" $URL
 print "OUT_DIR" $OUT_DIR
 print "DELETE_REMOTE_FILE" $DELETE_REMOTE_FILE
 print "CUT_OFF_TIME" "$(date -d "@$CUT_OFF_TIME")"
+#print "SPLIT_SIZE" $SPLIT_SIZE
+
+#exit
 
 #Trap ctrl-c
 trap clean SIGINT SIGTERM
@@ -194,10 +269,11 @@ declare -a files
 getDirectoryContent files $URL
 getNewFiles files $URL $CUT_OFF_TIME
 
-for NAME in ${files[@]}; do
+for f in ${files[@]}; do
   FILE_SIZE=$(getSize "$URL/$f")
   echo "Downloading $f with size $FILE_SIZE"
-  download "$URL" "$OUT_DIR" "$NAME" $FILE_SIZE
+#  downloadInChunks "$URL" "$OUT_DIR" "$f" $FILE_SIZE $SPLIT_SIZE
+  download "$URL" "$OUT_DIR" "$f" $FILE_SIZE $SPLIT_SIZE
 done
 
-[ ! -f "$WRK_DIR" ] || rm -R "$OUT_DIR/wrk"
+[ -f "$WRK_DIR" ] && rm -R "$OUT_DIR/wrk"
