@@ -17,7 +17,8 @@
 
 # monitor given remote directory and download new files to the target directory
 function usage() {
-    echo -e "Usage: folder-sync < -s | --source >  < -d | --dest >  < -u | --user >  < -p | --password >
+    [ "$1" = "" ] || echo -e "\n\tERROR: $1 is a required argument!"
+    echo -e "\n\tUsage: folder-sync < -s | --source >  < -d | --dest >  < -u | --user >  < -p | --password >
         [ -m | --marker ] [ -R ] [ -v ] [ -q ] [ -b ]
         Type 'folder-sync --help' for more information."
     exit 2
@@ -279,17 +280,34 @@ declare -A ARGS_MAP
 parseArgs CMD_ARGS ARGS_MAP
 for K in "${!ARGS_MAP[@]}"; do echo $K --- ${ARGS_MAP[$K]}; done
 
+# validate arguments
+[ ${ARGS_MAP[URL]+_} ] ||  usage "source"
+[ ${ARGS_MAP[USER]+_} ] || usage "user"
+[ ${ARGS_MAP[DEST]+_} ] || usage "destination"
+
+
+URL="${ARGS_MAP[PWD]}"
+USER="${ARGS_MAP[USER]}"
 PWD="${ARGS_MAP[PWD]}"
+DELETE_REMOTE_FILE=${ARGS_MAP[REM_FILE]:-"n"}
+
+OUT_DIR=${ARGS_MAP[DEST]}
+[ ! -d "$OUT_DIR" ] && $(mkdir -p -m 755 "$OUT_DIR")
+[ -d "$OUT_DIR" ] || usage "destination2"
+CUT_OFF_TIME=${ARGS_MAP[MARKER]:-$(date -d "$4" '+%s')}
+
+#[ ! -d "/path/to/dir" ]
+
+
+#PWD="${ARGS_MAP[PWD]}"
 echo "PWD $PWD"
 
 #[ -z ${PWD+x} ] || getPassword PWD
 [ -n "$PWD" ] || getPassword PWD
 echo "PWD $PWD"
 
-URL=$1
-OUT_DIR=${2:-"/tmp"}
-DELETE_REMOTE_FILE=${3:-"n"}
-CUT_OFF_TIME="$(date -d "$4" '+%s')" # time in epoch milliseconds
+exit
+
 SLEEP="60"
 
 #Check parameters
