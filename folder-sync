@@ -16,11 +16,101 @@
 ###########################
 
 # monitor given remote directory and download new files to the target directory
-function usage {
-  echo -e "Usage:\n\t`basename $0` [source url] [target dir] [delete remote file {default: n}]"
-  echo -e "Example:\n\t `basename $0` ftp://pesho:mzprx@192.168.1.1:21/remote/directory /tmp"
-  echo -e "\n\t `basename $0` ftp://pesho:mzprx@192.168.1.1:21/remote/directory /tmp y"
-  exit 1
+function usage() {
+    echo -e "Usage: folder-sync < -s | --source >  < -d | --dest >  < -u | --user >  < -p | --password >
+        [ -m | --marker ] [ -R ] [ -v ] [ -q ] [ -b ]
+        Type 'folder-sync --help' for more information."
+    exit 2
+}
+
+function help {
+   echo -e "${ansi_std}
+    Monitors an FTP directory and downloads all new files as per the provided options.
+
+    Note that there are three options for identifying "new" files:
+        1. Any file newer that the last file downloaded in the destination directory
+        2. Any file newer than the script start time if there are no files in the destination directory
+        3. Any file newer than the time marker provided with the -m option e.g. -m \"yesterday\"
+            see GNU documentation for all accepted formats:
+            https://www.gnu.org/software/coreutils/manual/html_node/Date-input-formats.html#Date-input-formats
+
+    To continuously download new files, use the -b option
+
+    Usage:
+
+    Required:
+        -s , --source     set the FTP source URL (with port if not using 21) along with the path i.e. \tp://192.168.1.1/ftp/root/files\"
+        -d , --dest       set the destination directory
+        -u , --user       set user name
+
+    Optional:
+        -p , --password   set the password. If omitted, the script will ask for it on the console
+        -m , --marker     custom cut-off time marker
+        -R                when provided will delete the file from the source location
+        -v                show verbose output
+        -q                don't show any output
+        -b                run in the background"
+  exit 0
+}
+
+parseArgs() {
+    declare -n __cmdargs=$1
+    declare -n __argsmap=$2
+
+    __parsed=$(getopt -a -n folder_sync -o hvqRbs:d:u:p:m: --long help,source:,dest:,user:,password:,marker: -- "${__cmdargs[@]}")
+
+    [ "$?" != "0" ] && usage
+
+    eval set -- "$__parsed"
+    while :
+    do
+      case "$1" in
+        # flags
+        -R ) __argsmap[REM_FILE]=1 ; shift ;;
+        -v ) __argsmap[LEVEL]=3    ; shift ;;
+        -q ) __argsmap[Level]=1    ; shift ;;
+        -b ) __argsmap[SRVICE]=1   ; shift ;;
+
+        # options
+        -h | --help) help ;;
+        -s | --source)   __argsmap[URL]=$2  ; shift 2 ;;
+        -d | --dest)     __argsmap[DEST]=$2 ; shift 2 ;;
+        -u | --user)     __argsmap[USER]=$2 ; shift 2 ;;
+        -p | --password) __argsmap[PWD]=$2  ; shift 2 ;;
+        --) shift; break ;;
+
+        *) echo "Unexpected option: $1"
+           usage ;;
+      esac
+    done
+}
+
+function getPassword() {
+
+    local __pwd="$1"
+    local password
+
+    echo -n "Enter password: "
+    while IFS= read -p "$prompt" -r -s -n 1 char
+    do
+        # Enter - accept password
+        if [[ $char == $'\0' ]] ; then
+            break
+        fi
+        # Backspace
+        if [[ $char == $'\177' ]] ; then
+            prompt=$'\b \b'
+            password="${password%?}"
+        else
+            prompt='*'
+            password+="$char"
+        fi
+    done
+
+    eval $__pwd="$password"
+    echo
+
+    return
 }
 
 #Cleanup on kill
@@ -183,6 +273,18 @@ function getcpid() {
 ###########################
 # main
 ###########################
+
+CMD_ARGS=("$@")
+declare -A ARGS_MAP
+parseArgs CMD_ARGS ARGS_MAP
+for K in "${!ARGS_MAP[@]}"; do echo $K --- ${ARGS_MAP[$K]}; done
+
+PWD="${ARGS_MAP[PWD]}"
+echo "PWD $PWD"
+
+#[ -z ${PWD+x} ] || getPassword PWD
+[ -n "$PWD" ] || getPassword PWD
+echo "PWD $PWD"
 
 URL=$1
 OUT_DIR=${2:-"/tmp"}
