@@ -80,15 +80,11 @@ parseArgs() {
     declare -n __cmdargs=$1
     declare -n __argsmap=$2
 
-#    local cmd="${__cmdargs[0]}"
-#    __argsmap[COMMAND]="$cmd"
-#    __cmdargs=("${__cmdargs[@]/$cmd}")
-
     local flags="hvqRbs:d:u:p:m:"
     local ops="start,stop,help,source:,dest:,user:,password:,marker:"
 
-    __parsed=$(getopt -a -n folder_sync -o hvqRbs:d:u:p:m: --long start,stop,help,source:,dest:,user:,password:,marker: -- "${__cmdargs[@]}")
-
+#    __parsed=$(getopt -a -n folder_sync -o hvqRbs:d:u:p:m: --long start,stop,help,source:,dest:,user:,password:,marker: -- "${__cmdargs[@]}")
+    __parsed=$(getopt -a -n folder_sync -o "$flags" --long "$ops" -- "${__cmdargs[@]}")
     [ "$?" != "0" ] && usage
 
     echo "parsed args ${__parsed[@]}"
@@ -111,7 +107,7 @@ parseArgs() {
         -d | --dest)     __argsmap[DEST]=$2 ; shift 2 ;;
         -u | --user)     __argsmap[USER]=$2 ; shift 2 ;;
         -p | --password) __argsmap[PWD]=$2  ; shift 2 ;;
-        --marker )       __argsmap[MARKER]=$(date -d "@$2" '+%s'); shift 2 ;;
+        -m | --marker)   __argsmap[MARKER]=$(date -d "@$2" '+%s'); shift 2 ;;
         --) shift; break ;;
         *) echo "Unexpected option: $1" ; usage ;;
       esac
