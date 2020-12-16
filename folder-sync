@@ -316,7 +316,7 @@ for K in "${!ARGS_MAP[@]}"; do echo "[$K] : [${ARGS_MAP[$K]}]"; done
 [ ${ARGS_MAP[USER]+_} ] || usage "-u | --user"
 [ ${ARGS_MAP[DEST]+_} ] || usage "-d | --dest"
 
-URL="${ARGS_MAP[PWD]}"
+URL="${ARGS_MAP[URL]}"
 USER="${ARGS_MAP[USER]}"
 DELETE_REMOTE_FILE=${ARGS_MAP[REM_FILE]:-"n"}
 echo "DELETE_REMOTE_FILE $DELETE_REMOTE_FILE"
@@ -332,23 +332,11 @@ CUT_OFF_TIME=${ARGS_MAP[MARKER]:-$(getTimeMarker "$OUT_DIR")}
 # verify password
 PWD="${ARGS_MAP[PWD]}"
 [ -n "$PWD" ] || getPassword PWD
-echo "PWD $PWD"
 
-exit
+
+
 
 SLEEP="60"
-
-#Check parameters
-if [ ! "$1" ] ; then
-  echo "source url with user credentials and the directory is required"
-  usage
-fi
-
-if [ ! "$2" ] ; then
-  echo "target dir is required"
-  usage
-fi
-
 
 
 # add verbose mode
