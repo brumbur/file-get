@@ -80,19 +80,30 @@ parseArgs() {
     declare -n __cmdargs=$1
     declare -n __argsmap=$2
 
-    __parsed=$(getopt -a -n folder_sync -o hvqRbs:d:u:p:m: --long help,source:,dest:,user:,password:,marker: -- "${__cmdargs[@]}")
+#    local cmd="${__cmdargs[0]}"
+#    __argsmap[COMMAND]="$cmd"
+#    __cmdargs=("${__cmdargs[@]/$cmd}")
+
+    local flags="hvqRbs:d:u:p:m:"
+    local ops="start,stop,help,source:,dest:,user:,password:,marker:"
+
+    __parsed=$(getopt -a -n folder_sync -o hvqRbs:d:u:p:m: --long start,stop,help,source:,dest:,user:,password:,marker: -- "${__cmdargs[@]}")
 
     [ "$?" != "0" ] && usage
+
+    echo "parsed args ${__parsed[@]}"
 
     eval set -- "$__parsed"
     while :
     do
       case "$1" in
         # flags
-        -R ) __argsmap[REM_FILE]=1 ; shift ;;
-        -v ) __argsmap[LEVEL]=3    ; shift ;;
-        -q ) __argsmap[Level]=1    ; shift ;;
-        -b ) __argsmap[SRVICE]=1   ; shift ;;
+        -R ) __argsmap[REM_FILE]="y" ; shift ;;
+        -v ) __argsmap[LEVEL]=3      ; shift ;;
+        -q ) __argsmap[Level]=1      ; shift ;;
+        -b ) __argsmap[SERVICE]=1    ; shift ;;
+        --start ) __argsmap[CMD]="START"; shift ;;
+        --stop )  __argsmap[CMD]="STOP" ; shift ;;
 
         # options
         -h | --help) help ;;
@@ -100,16 +111,14 @@ parseArgs() {
         -d | --dest)     __argsmap[DEST]=$2 ; shift 2 ;;
         -u | --user)     __argsmap[USER]=$2 ; shift 2 ;;
         -p | --password) __argsmap[PWD]=$2  ; shift 2 ;;
+        --marker )       __argsmap[MARKER]=$(date -d "@$2" '+%s'); shift 2 ;;
         --) shift; break ;;
-
-        *) echo "Unexpected option: $1"
-           usage ;;
+        *) echo "Unexpected option: $1" ; usage ;;
       esac
     done
 }
 
 function getPassword() {
-
     local __pwd="$1"
     local password
 
@@ -138,7 +147,7 @@ function getPassword() {
 
 #Cleanup on kill
 function clean {
-  echo "Download failed! Cleaning..."
+  print "${ansi_red}Download failed! Cleaning..."
   kill 0
   rm -Rf $OUT_DIR/wrk
   exit 1
@@ -173,7 +182,7 @@ function getDirectoryContent() {
 
 # takes the complete URL as argument and returns the last modified time
 function getSourceLastModifiedDate() {
-    local dt=`curl -I "$1" 2>&1 | awk '/Last-Modified:/ {sub("\r",""); print  $2,$3,$4,$5,$6,$7}'`
+    local dt=$(curl -I "$1" 2>&1 | awk '/Last-Modified:/ {sub("\r",""); print  $2,$3,$4,$5,$6,$7}')
     local ms="$(date -d "${dt}" '+%s')" # convert to ms
     echo "$ms"
     return
@@ -181,28 +190,28 @@ function getSourceLastModifiedDate() {
 
 function getDestinationLastModifiedDate() {
     local destDir=$1
-    local last=`find $destDir -type f -printf '%T@ %p\n' | sort -n | tail -1`
+    local last=$(find $destDir -type f -printf '%T@ %p\n' | sort -n | tail -1)
 
     [ -n "$last" ] || return
 
     file=(${last// / })
-    echo $(date -d "@${file[0]}" '+%s')
+
+    echo "$(date -d "@${file[0]}" '+%s')"
     return
 }
 
 function getTimeMarker() {
-    local destDir=$1
-    local last=`find $destDir -type f -printf '%T@ %p\n' | sort -n | tail -1`
+    local latest=$(find "$1" -type f -printf '%T@ %p\n' | sort -n | tail -1)
     local marker
 
-    if [ -n "$last" ]; then
-      marker=`date '+%s'` #current time
+    if [ -z ${latest+_} ]; then
+      marker=$(date '+%s')
     else
-      file=(${last// / })
-      marker=$(date -d "@${file[0]}" '+%s') # latest download time
+      file=(${latest// / })
+      marker=$(date -d "@${file[0]}" '+%s')
     fi
 
-    echo $marker
+    echo "$marker"
     return
 }
 
@@ -300,29 +309,28 @@ function getcpid() {
 CMD_ARGS=("$@")
 declare -A ARGS_MAP
 parseArgs CMD_ARGS ARGS_MAP
-for K in "${!ARGS_MAP[@]}"; do echo $K --- ${ARGS_MAP[$K]}; done
+for K in "${!ARGS_MAP[@]}"; do echo "[$K] : [${ARGS_MAP[$K]}]"; done
 
-# validate arguments
+# validate required arguments
 [ ${ARGS_MAP[URL]+_} ] ||  usage "-s | --source"
 [ ${ARGS_MAP[USER]+_} ] || usage "-u | --user"
 [ ${ARGS_MAP[DEST]+_} ] || usage "-d | --dest"
 
 URL="${ARGS_MAP[PWD]}"
 USER="${ARGS_MAP[USER]}"
-PWD="${ARGS_MAP[PWD]}"
 DELETE_REMOTE_FILE=${ARGS_MAP[REM_FILE]:-"n"}
+echo "DELETE_REMOTE_FILE $DELETE_REMOTE_FILE"
 
+# validate destination
 OUT_DIR=${ARGS_MAP[DEST]}
-#[ ! -d "$OUT_DIR" ] && $(mkdir -p -m 755 "$OUT_DIR")
+[ ! -d "$OUT_DIR" ] && $(mkdir -p -m 755 "$OUT_DIR")
 [ -d "$OUT_DIR" ] || usage "-d | --dest"
-CUT_OFF_TIME=${ARGS_MAP[MARKER]:-$(date -d "$4" '+%s')}
 
-#[ ! -d "/path/to/dir" ]
+# use the provided time marker, latest timestamp in the destination directory or current time (in this order)
+CUT_OFF_TIME=${ARGS_MAP[MARKER]:-$(getTimeMarker "$OUT_DIR")}
 
-#PWD="${ARGS_MAP[PWD]}"
-echo "PWD $PWD"
-
-#[ -z ${PWD+x} ] || getPassword PWD
+# verify password
+PWD="${ARGS_MAP[PWD]}"
 [ -n "$PWD" ] || getPassword PWD
 echo "PWD $PWD"
 
@@ -341,8 +349,7 @@ if [ ! "$2" ] ; then
   usage
 fi
 
-# use the timestamp of the last file we downloaded or if we cant find any, assume from now
-CUT_OFF_TIME=$(getTimeMarker $OUT_DIR)
+
 
 # add verbose mode
 print "URL" $URL
