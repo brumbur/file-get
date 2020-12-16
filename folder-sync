@@ -15,10 +15,28 @@
 # functions
 ###########################
 
-# monitor given remote directory and download new files to the target directory
+# for (( i = 30; i < 38; i++ )); do echo -e "\033[0;"$i"m Normal: (0;$i); \033[1;"$i"m Light: (1;$i)"; done
+# Normal: (0;30);  Light: (1;30)
+# Normal: (0;31);  Light: (1;31)
+# Normal: (0;32);  Light: (1;32)
+# Normal: (0;33);  Light: (1;33)
+# Normal: (0;34);  Light: (1;34)
+# Normal: (0;35);  Light: (1;35)
+# Normal: (0;36);  Light: (1;36)
+# Normal: (0;37);  Light: (1;37)
+
+ansi_red='\033[1;31m'
+ansi_blu='\033[1;34m'
+ansi_yel='\033[1;33m'
+ansi_cyn='\033[1;35m'
+ansi_std='\033[0;37m'
+
 function usage() {
-    [ "$1" = "" ] || echo -e "\n\tERROR: $1 is a required argument!"
-    echo -e "\n\tUsage: folder-sync < -s | --source >  < -d | --dest >  < -u | --user >  < -p | --password >
+    [ "$1" = "" ] || echo -e "\n\t${ansi_red}ERROR: \"$1\" is a required argument but is missing or is invalid${ansi_std}"
+    echo -e "Usage: folder-sync start | stop [options]
+
+        Options:
+        < -s | --source >  < -d | --dest >  < -u | --user >  < -p | --password >
         [ -m | --marker ] [ -R ] [ -v ] [ -q ] [ -b ]
         Type 'folder-sync --help' for more information."
     exit 2
@@ -38,6 +56,10 @@ function help {
     To continuously download new files, use the -b option
 
     Usage:
+
+    Commands:
+        start   execute the script
+        stop    stop the background process (applicable only for -b option)
 
     Required:
         -s , --source     set the FTP source URL (with port if not using 21) along with the path i.e. \tp://192.168.1.1/ftp/root/files\"
@@ -281,10 +303,9 @@ parseArgs CMD_ARGS ARGS_MAP
 for K in "${!ARGS_MAP[@]}"; do echo $K --- ${ARGS_MAP[$K]}; done
 
 # validate arguments
-[ ${ARGS_MAP[URL]+_} ] ||  usage "source"
-[ ${ARGS_MAP[USER]+_} ] || usage "user"
-[ ${ARGS_MAP[DEST]+_} ] || usage "destination"
-
+[ ${ARGS_MAP[URL]+_} ] ||  usage "-s | --source"
+[ ${ARGS_MAP[USER]+_} ] || usage "-u | --user"
+[ ${ARGS_MAP[DEST]+_} ] || usage "-d | --dest"
 
 URL="${ARGS_MAP[PWD]}"
 USER="${ARGS_MAP[USER]}"
@@ -292,12 +313,11 @@ PWD="${ARGS_MAP[PWD]}"
 DELETE_REMOTE_FILE=${ARGS_MAP[REM_FILE]:-"n"}
 
 OUT_DIR=${ARGS_MAP[DEST]}
-[ ! -d "$OUT_DIR" ] && $(mkdir -p -m 755 "$OUT_DIR")
-[ -d "$OUT_DIR" ] || usage "destination2"
+#[ ! -d "$OUT_DIR" ] && $(mkdir -p -m 755 "$OUT_DIR")
+[ -d "$OUT_DIR" ] || usage "-d | --dest"
 CUT_OFF_TIME=${ARGS_MAP[MARKER]:-$(date -d "$4" '+%s')}
 
 #[ ! -d "/path/to/dir" ]
-
 
 #PWD="${ARGS_MAP[PWD]}"
 echo "PWD $PWD"
