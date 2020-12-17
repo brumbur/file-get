@@ -46,7 +46,7 @@ function help {
    echo -e "${ansi_std}
     Monitors an FTP directory and downloads all new files as per the provided options.
 
-    Note that there are three options for identifying "new" files:
+    Note that there are three options for identifying \"new\" files:
         1. Any file newer that the last file downloaded in the destination directory
         2. Any file newer than the script start time if there are no files in the destination directory
         3. Any file newer than the time marker provided with the -m option e.g. -m \"yesterday\"
@@ -62,7 +62,7 @@ function help {
         stop    stop the background process (applicable only for -b option)
 
     Required:
-        -s , --source     set the FTP source URL (with port if not using 21) along with the path i.e. \tp://192.168.1.1/ftp/root/files\"
+        -s , --source     set the FTP source URL (with port if not using 21) along with the path i.e. \"ftp://192.168.1.1/ftp/root/files\"
         -d , --dest       set the destination directory
         -u , --user       set user name
 
@@ -144,40 +144,41 @@ function getPassword() {
 function clean {
   print "${ansi_red}Download failed! Cleaning..."
   kill 0
-  rm -Rf $OUT_DIR/wrk
+  rm -Rf "$OUT_DIR/wrk"
   exit 1
 }
 
 # get the file details and parse the size
 function getSize() {
-  local SIZE="`curl -qIL $1 2> /dev/null | awk '/Length/ {print $2}'|grep -o '[0-9]*'`"
-  local SIZE=${SIZE:-1}
-  echo $SIZE
-  return
+    local __size
+    __size="$(curl -u "$USER:$PWD" -qIL $1 2> /dev/null | awk '/Length/ {print $2}'|grep -o '[0-9]*')"
+    local __size=${__size:-1}
+    echo "$__size"
+    return
 }
 
 # takes an array reference and updates it with the file names in the given directory
 function getDirectoryContent() {
-  local -n arr=$1
-  local url="$2/"
-  local response=$(curl -s "$url")
+    local -n arr=$1
+    local url="$2"
 
-  if [ $? -eq 0 ]
-  then
-    echo ""
-  else
-    echo "ERROR: $?" >&2
-    clean
-  fi
+    print "curl -s -u $USER:$PWD $url"
+    arr=("$(curl -s -u "$USER:$PWD" "$url" | sed -nr 's/(^-[ rw-].*)( *)([0-9])(.*)/\4/p' | sed -e 's/^ //g' | sed -e 's/ /\ /g')")
 
-  arr=("$(curl -s "$url" | sed -nr 's/(^-[ rw-].*)( *)([0-9])(.*)/\4/p' | sed -e 's/^ //g' | sed -e 's/ /\ /g')")
+    if [ $? -eq 0 ]
+        then
+        echo ""
+    else
+        echo "ERROR: $?" >&2
+        clean
+    fi
 
-  return
+    return
 }
 
 # takes the complete URL as argument and returns the last modified time
 function getSourceLastModifiedDate() {
-    local dt=$(curl -I "$1" 2>&1 | awk '/Last-Modified:/ {sub("\r",""); print  $2,$3,$4,$5,$6,$7}')
+    local dt=$(curl -I -u "$USER:$PWD" "$1" 2>&1 | awk '/Last-Modified:/ {sub("\r",""); print  $2,$3,$4,$5,$6,$7}')
     local ms="$(date -d "${dt}" '+%s')" # convert to ms
     echo "$ms"
     return
@@ -218,7 +219,10 @@ function getNewFiles() {
     print "Checking location" "$url"
 
     for f in "${__arr[@]}"; do
-        lmd=$(getSourceLastModifiedDate "$url/$f")
+        echo "f: [$f]" # todo check file is not empty
+        lmd=$(getSourceLastModifiedDate "$url/$f") #todo verify lmd is not empty
+        echo "LMD: $lmd"
+        [ -n "$lmd" ] || continue
         if [ "$cutoff" -ge "$lmd" ]; then
             print "\t(-) $f is old" "skipped"
             __arr=("${__arr[@]/$f}") # remove old file
@@ -230,62 +234,92 @@ function getNewFiles() {
 }
 
 function calcProgress() {
-  # local FNAME=$1
-  # local PARTNUM=$2
-  # local SZ=$3
-  # local T=$4
+        # local FNAME=$1
+        # local PARTNUM=$2
+        # local SZ=$3
+        # local T=$4
 
-  [[ $3 -eq 0 ]] && return
+        [[ $3 -eq 0 ]] && return
 
-  local GOTSIZE=$((`eval ls -l "$1".{1..$2} 2> /dev/null | awk 'BEGIN{SUM=0}{SUM=SUM+$5}END{print SUM}'`))
-  local TIMEDIFF=$(( `date +%s` - $4 ))
-  local RATE=$(( ($GOTSIZE / $TIMEDIFF)/1024 ))
-  local PCT=$(( ($GOTSIZE*100) / $3 ))
+        local GOT__size=$((`eval ls -l "$1".{1..$2} 2> /dev/null | awk 'BEGIN{SUM=0}{SUM=SUM+$5}END{print SUM}'`))
+        local TIMEDIFF=$(( `date +%s` - $4 ))
+        local RATE=$(( ($GOT__size / $TIMEDIFF)/1024 ))
+        local PCT=$(( ($GOT__size*100) / $3 ))
 
-  echo "Downloading $1 in $2 parts: $(($GOTSIZE/1048576)) / $(($3/1048576)) mb @ $(($RATE)) KB/s ($PCT%).    "
+        echo  "Downloading $1 in $2 parts: $(($GOT__size/1048576)) / $(($3/1048576)) mb @ $(($RATE)) KB/s ($PCT%).    "
+#        local progress_msg
+#        progress_msg="Downloading $1 in $2 parts: $(($GOT__size/1048576)) / $(($3/1048576)) mb @ $(($RATE)) KB/s ($PCT%).    "
+#        echo "$progress_msg"
+#        tput ech ${#__size} # erase the last reported size value
+#        tput cub 1000 # move 1000 chars left
 
   return
 }
 
 function download() {
-  local SRC="$1"
-  local DEST="$2"
-  local NAME="$3"
-  local SIZE=$4
-  local SPLIT_NUM=1
+    local SRC="$1"
+    local DEST="$2"
+    local NAME="$3"
+    local __size=$4
+    local SPLIT_NUM=1 # only needed when downloading in multiple parts
 
-  WRK_DIR="$DEST/wrk"
-  mkdir -p -m 755 "$WRK_DIR"
-  [ -d "$OUT_DIR" ] || print "ERROR: Cannot create working directory [$WRK_DIR].Please check access bfor the destination"
+    WRK_DIR="$DEST/wrk"
+    mkdir -p "$WRK_DIR" ; chmod 755 "$WRK_DIR"
+    [ -d "$OUT_DIR" ] || print "ERROR: Cannot create working directory [$WRK_DIR]. Please check destination permissions"
 
-  curl -R --ftp-pasv -o "${WRK_DIR}/${NAME}.1" "$SRC/$NAME" 2> /dev/null &
+    echo "curl -R --ftp-pasv -u $USER:$PWD -o ${WRK_DIR}/${NAME}.1 $SRC/$NAME"
+    curl -R --ftp-pasv -u "$USER:$PWD" -o "${WRK_DIR}/${NAME}.1" "$SRC/$NAME" 2> /dev/null &
 
-  # Wait for the job to complete while showing progress
-  TIME=$((`date +%s`-1))
-  while jobs | grep -q Running ; do
-    echo -n $(calcProgress "${WRK_DIR}/${NAME}.1" $SPLIT_NUM $SIZE $TIME)
-    tput ech ${#SIZE} # erase the last reported size value
-    tput cub 1000 # move 1000 chars left
-    sleep 1
-  done
+    # Wait for the job to complete while showing progress
+    TIME=$(( $(date +%s)-1 ))
+    while jobs | grep -q Running ;
+    do
+#        echo -n "$(calcProgress "${WRK_DIR}/${NAME}.1" "$SPLIT_NUM" "$__size" "$TIME")"
+#        tput ech ${#__size} # erase the last reported size value
+#        tput cub 1000 # move 1000 chars left
+        sleep 1
+    done
 
-  echo $(calcProgress "${WRK_DIR}/${NAME}.1" $SPLIT_NUM $SIZE $TIME)
+#    echo "$(calcProgress "${WRK_DIR}/${NAME}.1" "$SPLIT_NUM" "$__size ""$TIME")"
 
-  `mv "${WRK_DIR}/${NAME}.1" "$DEST/$NAME"`
+    mv "${WRK_DIR}/${NAME}.1" "$DEST/$NAME"
 
-  if [ $? -eq 0 ]
-  then
-    echo "Download completed! Check file in $DEST"
-    local file_path=$(echo ${SRC} | cut -d@ -f2 | cut -d/ -f2- | cut -d? -f1)
-    [ $DELETE_REMOTE_FILE = "y" ] && `curl $SRC -Q"DELE $file_path/$NAME" 2> /dev/null`
-  else
-    echo "Could not download file: $?" >&2
-    clean
-  fi
+    if [ $? -eq 0 ]
+    then
+        local file_path
+        file_path=$(echo "$SRC" | cut -d@ -f2 | cut -d/ -f2- | cut -d? -f1)
+        [ "$DELETE_REMOTE_FILE" = "y" ] && curl -u "$USER:$PWD" "$SRC" -Q"DELE $file_path/$NAME" 2> /dev/null
+        echo "Download completed! Check file in $DEST"
+    else
+        echo "Could not download file: $?" >&2
+        clean
+    fi
 }
 
 function print() {
   echo -e "$1 [$2]"
+}
+
+function checkAndDownload() {
+    local __url="$1"
+    local __time="$2"
+    local __out="$3"
+    local -a files
+
+    print "Checking for new files as off [$(date -d @$__time)] in [$__url]"
+    getDirectoryContent files "$__url"
+    print "Found: " "${files[@]}"
+    getNewFiles files "$__url" "$__time"
+    print "New files to download: " "${files[@]}"
+
+    for f in ${files[@]}; do
+        local __size=$(getSize "$__url/$f")
+        echo "Downloading $f with size $__size"
+        download "$__url" "$__out" "$f" "$__size"
+    done
+    print "Done!"
+
+    return
 }
 
 # cygwin needs to have procps-ng package to support pgrep (https://cygwin.com/packages/summary/procps-ng.html)
@@ -352,24 +386,29 @@ trap "exit" INT TERM ERR
 trap "kill 0" EXIT
 
 # start process
-declare -a files
+#declare -a files
 
 # background loop
-while /bin/true; do
-  CUT_OFF_TIME=$(getTimeMarker $OUT_DIR)
-  print "Checking for new files as off" "$(date -d @$CUT_OFF_TIME)"
-  getDirectoryContent files $URL
-  getNewFiles files $URL $CUT_OFF_TIME
+#while :
+#do
+    checkAndDownload "$URL" "$CUT_OFF_TIME" "$OUT_DIR"
+#    print "Checking for new files as off" "$(date -d "@$CUT_OFF_TIME")"
+#    getDirectoryContent files "$URL"
+#    getNewFiles files "$URL" "$CUT_OFF_TIME"
+#
+#    for NAME in ${files[@]}; do
+#        FILE___size=$(getSize "$URL/$f")
+#        echo "Downloading $NAME with size $FILE___size"
+#        download "$URL" "$OUT_DIR" "$NAME" "$FILE___size"
+#    done
 
-  for NAME in ${files[@]}; do
-    FILE_SIZE=$(getSize "$URL/$f")
-    echo "Downloading $NAME with size $FILE_SIZE"
-    download "$URL" "$OUT_DIR" "$NAME" $FILE_SIZE
-  done
+#    rm -Rf "$OUT_DIR/wrk"
+    sleep "$SLEEP"
+    CUT_OFF_TIME=$(getTimeMarker "$OUT_DIR")
+    echo "Finished sync. Exiting."
+#done
 
-  rm -Rf "$OUT_DIR/wrk"
-  sleep $SLEEP
-done &
+rm -Rf "$OUT_DIR/wrk"
 
 # cygwin needs to have procps-ng package to support pgrep (https://cygwin.com/packages/summary/procps-ng.html)
 #echo "$BASHPID Started the job with PID $(getcpid $BASHPID)"
@@ -379,5 +418,3 @@ done &
 
 echo "Parent PID [$BASHPID] will wait on the background job"
 echo "To STOP use Ctrl-C"
-
-wait
