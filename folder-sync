@@ -1,34 +1,26 @@
 #!/bin/bash
 
-#  Done:
-#  1 - от къде да сваля
-#  2 - къде да качва  (temp) или в папка на друга машина в мрежата
-#  3 - ключ дали да трие сваленото (y/n)
-#  4 - възможнжст за стартиране на повече от един скрипт едновремено
-#
-#  To do:
-#  - като екстра за напреднали - да проверява за наличието на стринг в името на файла. Например " BG60" или "BG 60" или "BG_60". Ако има такъв стринг - да качи файла в друга папка (temp1)
-#  $ ./folder-sync ftp://pesho:mzprx@192.168.1.1:21/remote/directory ./temp  y/n ("BG60","BG 60","BG_60") ./temp1
 
+
+#     ____     __   __        ____
+#    / __/__  / /__/ /__ ____/ __/_ _____  ____
+#   / _// _ \/ / _  / -_) __/\ \/ // / _ \/ __/
+#  /_/  \___/_/\_,_/\__/_/ /___/\_, /_//_/\__/
+#                              /___/
+#
 
 ###########################
 # functions
 ###########################
 
 # for (( i = 30; i < 38; i++ )); do echo -e "\033[0;"$i"m Normal: (0;$i); \033[1;"$i"m Light: (1;$i)"; done
-# Normal: (0;30);  Light: (1;30)
-# Normal: (0;31);  Light: (1;31)
-# Normal: (0;32);  Light: (1;32)
-# Normal: (0;33);  Light: (1;33)
-# Normal: (0;34);  Light: (1;34)
-# Normal: (0;35);  Light: (1;35)
-# Normal: (0;36);  Light: (1;36)
-# Normal: (0;37);  Light: (1;37)
 
 ansi_red='\033[1;31m'
-ansi_blu='\033[1;34m'
+ansi_grn='\033[1;32m'
 ansi_yel='\033[1;33m'
+ansi_blu='\033[1;34m'
 ansi_cyn='\033[1;35m'
+ansi_bl2='\033[1;36m'
 ansi_std='\033[0;37m'
 
 function usage() {
@@ -179,16 +171,7 @@ function getDirectoryContent() {
     local url="$2"
 
     # shellcheck disable=SC2034
-    print "curl -s -u $USER:$PWD $url"
     arr=("$(curl -s -u "$USER:$PWD" "$url/" | sed -nr 's/(^-[ rw-].*)( *)([0-9])(.*)/\4/p' | sed -e 's/^ //g' | sed -e 's/ /\ /g')")
-
-    if [ $? -eq 0 ]
-        then
-        echo ""
-    else
-        echo "ERROR: $?" >&2
-        clean
-    fi
 
     return
 }
@@ -306,7 +289,6 @@ function download() {
         local file_path
         file_path=$(echo "$SRC" | cut -d@ -f2 | cut -d/ -f2- | cut -d? -f1)
         [ "$DELETE_REMOTE_FILE" = "y" ] && curl -u "$USER:$PWD" "$SRC" -Q"DELE $file_path/$NAME" 2> /dev/null
-#        echo "Download completed! Check file in $DEST"
     else
         echo "Could not download file: $?" >&2
         clean
@@ -314,7 +296,7 @@ function download() {
 }
 
 function print() {
-  echo -e "$1 [$2]"
+  echo -e "$1 $2"
 }
 
 function checkAndDownload() {
@@ -372,7 +354,9 @@ function service {
 CMD_ARGS=("$@")
 declare -A ARGS_MAP
 parseArgs CMD_ARGS ARGS_MAP
-for K in "${!ARGS_MAP[@]}"; do echo "[$K] : [${ARGS_MAP[$K]}]"; done
+
+#todo verbose option
+#for K in "${!ARGS_MAP[@]}"; do echo "[$K] : [${ARGS_MAP[$K]}]"; done
 
 # validate required arguments
 [ ${ARGS_MAP[URL]+_} ] ||  usage "-s | --source"
@@ -405,48 +389,49 @@ LEVEL=${ARGS_MAP[LEVEL]:-2}
 LOG=${ARGS_MAP[LOG]:-"$OUT_DIR/log.txt"}
 
 # todo: add verbose mode
-print "URL" "$URL"
-print "OUT_DIR" "$OUT_DIR"
-print "USER" "$USER"
-print "SERVICE" "$SERVICE"
-print "SLEEP" "$SLEEP"
-print "LEVEL" "$LEVEL"
-print "LOG" "$LOG"
-print "DELETE_REMOTE_FILE" "$DELETE_REMOTE_FILE"
-print "CUT_OFF_TIME" "$(date -d "@$CUT_OFF_TIME")"
+#print "URL" "$URL"
+#print "OUT_DIR" "$OUT_DIR"
+#print "USER" "$USER"
+#print "SERVICE" "$SERVICE"
+#print "SLEEP" "$SLEEP"
+#print "LEVEL" "$LEVEL"
+#print "LOG" "$LOG"
+#print "DELETE_REMOTE_FILE" "$DELETE_REMOTE_FILE"
+#print "CUT_OFF_TIME" "$(date -d "@$CUT_OFF_TIME")"
 
-# set trap commands
+## set trap commands
 trap clean SIGINT SIGTERM
 trap "exit" INT TERM ERR
-trap "kill 0" EXIT
+#trap "kill 0" EXIT # terminated all jobs on exit
 
 # start process
-if [ "$SERVICE" -eq 0 ]
-then
-    checkAndDownload "$URL" "$CUT_OFF_TIME" "$OUT_DIR"
-    echo "Folder-sync completed"
-    rm -Rf "$OUT_DIR/wrk"
-    exit
-fi
-
-echo "Folder-sync started as PID [$BASHPID]. To terminate, use \"--stop\" option or execute kill -9 $BASHPID"
-echo "Parent [$!] $(getcpid $BASHPID)"
-
-while /bin/true; do
-    echo "Parent [$!] $(getcpid $BASHPID)"
-    sleep "$SLEEP"
-    checkAndDownload "$URL" "$CUT_OFF_TIME" "$OUT_DIR" 2>&1>>$LOG
-    CUT_OFF_TIME=$(getTimeMarker "$OUT_DIR") #update time marker
-done &
-echo "service started"
-
-
-
 # cygwin needs to have procps-ng package to support pgrep (https://cygwin.com/packages/summary/procps-ng.html)
 #echo "$BASHPID Started the job with PID $(getcpid $BASHPID)"
 
-# cygwin does not support ps -x
-#echo "PPID `ps -axf | grep $BASHPID`"
 
-#echo "Parent PID [$BASHPID] will wait on the background job"
-#echo "Use -stop option or execute kill $BASHPID"
+# logo
+# todo: option for silent
+echo -e ""
+echo -e "${ansi_grn}     ____     __   __       ${ansi_yel} ____             ${ansi_std}"
+echo -e "${ansi_grn}    / __/__  / /__/ /__ ____${ansi_yel}/ __/_ _____  ____${ansi_std}"
+echo -e "${ansi_grn}   / _// _ \/ / _  / -_) __/${ansi_yel}\ \/ // / _ \/ __/${ansi_std}"
+echo -e "${ansi_grn}  /_/  \___/_/\_,_/\__/_/ ${ansi_yel}/___/\_, /_//_/\__/ ${ansi_std}"
+echo -e "${ansi_grn}                          ${ansi_yel}    /___/           ${ansi_std}"
+echo -e ""
+
+if [ "$SERVICE" -eq 1 ]
+then
+    echo -e "${ansi_grn}Folder-sync started as background process; use '--stop' option to terminate it.${ansi_std}"
+    { (
+        while /bin/true; do
+        checkAndDownload "$URL" "$CUT_OFF_TIME" "$OUT_DIR"
+        sleep "$SLEEP"
+        CUT_OFF_TIME=$(getTimeMarker "$OUT_DIR") #update time marker
+#    done 2>&1>>"$LOG" &
+    done &); }  2>&1>>"$LOG"
+else
+    echo -e "${ansi_grn}Folder-sync running...${ansi_std}"
+    checkAndDownload "$URL" "$CUT_OFF_TIME" "$OUT_DIR"
+    echo -e "${ansi_grn}Folder-sync completed${ansi_std}"
+    rm -Rf "$OUT_DIR/wrk"
+fi

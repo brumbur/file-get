@@ -1,8 +1,7 @@
 #!/bin/bash
 
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
-$DIR/folder-sync "$1" "$2" "$3" 2>&1 > $DIR/log.txt &
+"$DIR"/folder-sync "$@" > "$DIR"/log.txt &
 job_pid=$!
 echo "Started $DIR/folder-sync with PID $job_pid."
 echo "Job log stored at $DIR/log.txt"
-echo "Use kill $job_pid to terminate the job."
