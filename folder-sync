@@ -69,6 +69,7 @@ function help {
     Optional:
         -p , --password   set the password. If omitted, the script will ask for it on the console
         -m , --marker     custom cut-off time marker
+        -l , --logfile    log file
         -R                when provided will delete the file from the source location
         -v                show verbose output
         -q                don't show any output
@@ -80,13 +81,13 @@ parseArgs() {
     declare -n __cmdargs=$1
     declare -n __argsmap=$2
 
-    local flags="hvqRb:s:d:u:p:m:"
-    local ops="start,stop,help,source:,dest:,user:,password:,marker:"
+    local flags="hvqRb:s:d:u:p:m:l:"
+    local ops="start,stop,help,source:,dest:,user:,password:,marker:logfile:"
 
     __parsed=$(getopt -a -n folder_sync -o "$flags" --long "$ops" -- "${__cmdargs[@]}")
     [ $? -ne 0 ] && usage
 
-    printf "parsed args: [%s]\n" "${__parsed[@]}"
+#    printf "parsed args: [%s]\n" "${__parsed[@]}"
 
     eval set -- "$__parsed"
     while :
@@ -97,7 +98,7 @@ parseArgs() {
         -v ) __argsmap[LEVEL]=3      ; shift ;;
         -q ) __argsmap[Level]=1      ; shift ;;
         --start ) __argsmap[CMD]="START"; shift ;;
-        --stop )  __argsmap[CMD]="STOP" ; shift ;;
+        --stop ) stop ;;
 
         # options
         -h | --help) help ;;
@@ -105,12 +106,31 @@ parseArgs() {
         -d | --dest)     __argsmap[DEST]=$2 ; shift 2 ;;
         -u | --user)     __argsmap[USER]=$2 ; shift 2 ;;
         -p | --password) __argsmap[PWD]=$2  ; shift 2 ;;
+        -l | --logfile)  __argsmap[LOG]=$2  ; shift 2 ;;
         -b ) __argsmap[SERVICE]=1; __argsmap[SLEEP]=$2; shift 2 ;;
         -m | --marker)   __argsmap[MARKER]=$(date -d "@$2" '+%s'); shift 2 ;;
         --) shift; break ;;
         *) echo "Unexpected option: $1" ; usage ;;
       esac
     done
+}
+
+function stop {
+#ps -uf #forest
+#killall -s 9 folder-sync
+#killall -w folder-sync
+killall -r folder-sync
+
+#cygwin
+#pkill
+}
+
+#Cleanup on kill
+function clean {
+  print "${ansi_red}Download failed! Cleaning..."
+  kill 0
+  rm -Rf "$OUT_DIR/wrk"
+  exit 1
 }
 
 function getPassword() {
@@ -140,18 +160,14 @@ function getPassword() {
     return
 }
 
-#Cleanup on kill
-function clean {
-  print "${ansi_red}Download failed! Cleaning..."
-  kill 0
-  rm -Rf "$OUT_DIR/wrk"
-  exit 1
-}
+
+
+
 
 # get the file details and parse the size
 function getSize() {
     local __size
-    __size="$(curl -u "$USER:$PWD" -qIL $1 2> /dev/null | awk '/Length/ {print $2}'|grep -o '[0-9]*')"
+    __size="$(curl -u "$USER:$PWD" -qIL "$1" 2> /dev/null | awk '/Length/ {print $2}'|grep -o '[0-9]*')"
     local __size=${__size:-1}
     echo "$__size"
     return
@@ -162,8 +178,9 @@ function getDirectoryContent() {
     local -n arr=$1
     local url="$2"
 
+    # shellcheck disable=SC2034
     print "curl -s -u $USER:$PWD $url"
-    arr=("$(curl -s -u "$USER:$PWD" "$url" | sed -nr 's/(^-[ rw-].*)( *)([0-9])(.*)/\4/p' | sed -e 's/^ //g' | sed -e 's/ /\ /g')")
+    arr=("$(curl -s -u "$USER:$PWD" "$url/" | sed -nr 's/(^-[ rw-].*)( *)([0-9])(.*)/\4/p' | sed -e 's/^ //g' | sed -e 's/ /\ /g')")
 
     if [ $? -eq 0 ]
         then
@@ -200,10 +217,10 @@ function getTimeMarker() {
     local latest=$(find "$1" -type f -printf '%T@ %p\n' | sort -n | tail -1)
 
     if [ -z ${latest+_} ]; then
-      echo $(date '+%s')
+      echo "$(date '+%s')"
     else
       file=(${latest// / })
-      echo $(date -d "@${file[0]}" '+%s')
+      echo "$(date -d "@${file[0]}" '+%s')"
     fi
 
     return
@@ -218,10 +235,11 @@ function getNewFiles() {
 
     print "Checking location" "$url"
 
-    for f in "${__arr[@]}"; do
-        echo "f: [$f]" # todo check file is not empty
+    # shellcheck disable=SC2068
+    for f in ${__arr[@]}; do
+        #echo "f: [$f]" # todo check file is not empty
         lmd=$(getSourceLastModifiedDate "$url/$f") #todo verify lmd is not empty
-        echo "LMD: $lmd"
+#        echo "f: [$cutoff - $lmd]"
         [ -n "$lmd" ] || continue
         if [ "$cutoff" -ge "$lmd" ]; then
             print "\t(-) $f is old" "skipped"
@@ -267,7 +285,6 @@ function download() {
     mkdir -p "$WRK_DIR" ; chmod 755 "$WRK_DIR"
     [ -d "$OUT_DIR" ] || print "ERROR: Cannot create working directory [$WRK_DIR]. Please check destination permissions"
 
-    echo "curl -R --ftp-pasv -u $USER:$PWD -o ${WRK_DIR}/${NAME}.1 $SRC/$NAME"
     curl -R --ftp-pasv -u "$USER:$PWD" -o "${WRK_DIR}/${NAME}.1" "$SRC/$NAME" 2> /dev/null &
 
     # Wait for the job to complete while showing progress
@@ -289,7 +306,7 @@ function download() {
         local file_path
         file_path=$(echo "$SRC" | cut -d@ -f2 | cut -d/ -f2- | cut -d? -f1)
         [ "$DELETE_REMOTE_FILE" = "y" ] && curl -u "$USER:$PWD" "$SRC" -Q"DELE $file_path/$NAME" 2> /dev/null
-        echo "Download completed! Check file in $DEST"
+#        echo "Download completed! Check file in $DEST"
     else
         echo "Could not download file: $?" >&2
         clean
@@ -308,29 +325,44 @@ function checkAndDownload() {
 
     print "Checking for new files as off [$(date -d @$__time)] in [$__url]"
     getDirectoryContent files "$__url"
-    print "Found: " "${files[@]}"
+#    print "Found: " "${files[@]}"
     getNewFiles files "$__url" "$__time"
-    print "New files to download: " "${files[@]}"
+#    print "New files to download: " "$(( ${#files[@]}-1 ))"
 
+    # shellcheck disable=SC2068
     for f in ${files[@]}; do
         local __size=$(getSize "$__url/$f")
         echo "Downloading $f with size $__size"
         download "$__url" "$__out" "$f" "$__size"
     done
-    print "Done!"
 
     return
 }
 
 # cygwin needs to have procps-ng package to support pgrep (https://cygwin.com/packages/summary/procps-ng.html)
 function getcpid() {
-    cpids=`pgrep -P $1|xargs`
+    cpids=$(pgrep -P $1 | xargs)
 
     for cpid in $cpids;
     do
         echo "$cpid"
-        getcpid $cpid
+        getcpid "$cpid"
     done
+}
+
+function service {
+    # background loop
+        echo "JOB: $(getcpid $BASHPID)"
+        checkAndDownload "$URL" "$CUT_OFF_TIME" "$OUT_DIR"
+
+        while /bin/true; do
+#            echo "Folder-sync waiting for new files..." 2>&1>>$LOG
+            sleep "$SLEEP"
+            checkAndDownload "$URL" "$CUT_OFF_TIME" "$OUT_DIR" 2>&1>>$LOG
+            CUT_OFF_TIME=$(getTimeMarker "$OUT_DIR") #update time marker
+        done &
+
+        echo "service started"
 }
 
 ###########################
@@ -350,6 +382,7 @@ for K in "${!ARGS_MAP[@]}"; do echo "[$K] : [${ARGS_MAP[$K]}]"; done
 URL="${ARGS_MAP[URL]}"
 USER="${ARGS_MAP[USER]}"
 DELETE_REMOTE_FILE=${ARGS_MAP[REM_FILE]:-"n"}
+CMD=${ARGS_MAP[CMD]:-"START"}
 
 # validate destination
 OUT_DIR=${ARGS_MAP[DEST]}
@@ -369,6 +402,7 @@ SLEEP=${ARGS_MAP[SLEEP]:-60}
 
 # set log level
 LEVEL=${ARGS_MAP[LEVEL]:-2}
+LOG=${ARGS_MAP[LOG]:-"$OUT_DIR/log.txt"}
 
 # todo: add verbose mode
 print "URL" "$URL"
@@ -377,6 +411,7 @@ print "USER" "$USER"
 print "SERVICE" "$SERVICE"
 print "SLEEP" "$SLEEP"
 print "LEVEL" "$LEVEL"
+print "LOG" "$LOG"
 print "DELETE_REMOTE_FILE" "$DELETE_REMOTE_FILE"
 print "CUT_OFF_TIME" "$(date -d "@$CUT_OFF_TIME")"
 
@@ -386,29 +421,26 @@ trap "exit" INT TERM ERR
 trap "kill 0" EXIT
 
 # start process
-#declare -a files
-
-# background loop
-#while :
-#do
+if [ "$SERVICE" -eq 0 ]
+then
     checkAndDownload "$URL" "$CUT_OFF_TIME" "$OUT_DIR"
-#    print "Checking for new files as off" "$(date -d "@$CUT_OFF_TIME")"
-#    getDirectoryContent files "$URL"
-#    getNewFiles files "$URL" "$CUT_OFF_TIME"
-#
-#    for NAME in ${files[@]}; do
-#        FILE___size=$(getSize "$URL/$f")
-#        echo "Downloading $NAME with size $FILE___size"
-#        download "$URL" "$OUT_DIR" "$NAME" "$FILE___size"
-#    done
+    echo "Folder-sync completed"
+    rm -Rf "$OUT_DIR/wrk"
+    exit
+fi
 
-#    rm -Rf "$OUT_DIR/wrk"
+echo "Folder-sync started as PID [$BASHPID]. To terminate, use \"--stop\" option or execute kill -9 $BASHPID"
+echo "Parent [$!] $(getcpid $BASHPID)"
+
+while /bin/true; do
+    echo "Parent [$!] $(getcpid $BASHPID)"
     sleep "$SLEEP"
-    CUT_OFF_TIME=$(getTimeMarker "$OUT_DIR")
-    echo "Finished sync. Exiting."
-#done
+    checkAndDownload "$URL" "$CUT_OFF_TIME" "$OUT_DIR" 2>&1>>$LOG
+    CUT_OFF_TIME=$(getTimeMarker "$OUT_DIR") #update time marker
+done &
+echo "service started"
 
-rm -Rf "$OUT_DIR/wrk"
+
 
 # cygwin needs to have procps-ng package to support pgrep (https://cygwin.com/packages/summary/procps-ng.html)
 #echo "$BASHPID Started the job with PID $(getcpid $BASHPID)"
@@ -416,5 +448,5 @@ rm -Rf "$OUT_DIR/wrk"
 # cygwin does not support ps -x
 #echo "PPID `ps -axf | grep $BASHPID`"
 
-echo "Parent PID [$BASHPID] will wait on the background job"
-echo "To STOP use Ctrl-C"
+#echo "Parent PID [$BASHPID] will wait on the background job"
+#echo "Use -stop option or execute kill $BASHPID"
