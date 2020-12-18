@@ -88,7 +88,7 @@ parseArgs() {
         # flags
         -R ) __argsmap[REM_FILE]="y" ; shift ;;
         -v ) __argsmap[LEVEL]=3      ; shift ;;
-        -q ) __argsmap[Level]=1      ; shift ;;
+        -q ) __argsmap[LEVEL]=1      ; shift ;;
         --start ) __argsmap[CMD]="START"; shift ;;
         --stop ) stop ;;
 
@@ -108,13 +108,16 @@ parseArgs() {
 }
 
 function stop {
-#ps -uf #forest
-#killall -s 9 folder-sync
-#killall -w folder-sync
-killall -r folder-sync
-
-#cygwin
-#pkill
+    if [ "$(uname)" = "Linux" ]
+    then
+        killall -r folder-sync
+    else
+        #cygwin
+        CYGPID=$(procps -wwFAH | grep -v "grep" | grep "folder-sync" | cut -c 10-15)
+        echo -e "Stopping CYGWIN PID(s)"
+        echo "$CYGPID"
+        kill -s SIGTERM $(procps -wwFAH | grep -v "grep" | grep "folder-sync" | cut -c 10-15) 2>&1 /dev/null
+    fi
 }
 
 #Cleanup on kill
@@ -222,13 +225,12 @@ function getNewFiles() {
     for f in ${__arr[@]}; do
         #echo "f: [$f]" # todo check file is not empty
         lmd=$(getSourceLastModifiedDate "$url/$f") #todo verify lmd is not empty
-#        echo "f: [$cutoff - $lmd]"
         [ -n "$lmd" ] || continue
         if [ "$cutoff" -ge "$lmd" ]; then
-            print "\t(-) $f is old" "skipped"
+            print "\t(-) $f is old - skipped"
             __arr=("${__arr[@]/$f}") # remove old file
         else
-          print "\t(+) $f is newer" "downloading"
+          print "\t(+) $f is newer - downloading"
         fi
     done
     return
@@ -321,36 +323,12 @@ function checkAndDownload() {
     return
 }
 
-# cygwin needs to have procps-ng package to support pgrep (https://cygwin.com/packages/summary/procps-ng.html)
-function getcpid() {
-    cpids=$(pgrep -P $1 | xargs)
-
-    for cpid in $cpids;
-    do
-        echo "$cpid"
-        getcpid "$cpid"
-    done
-}
-
-function service {
-    # background loop
-        echo "JOB: $(getcpid $BASHPID)"
-        checkAndDownload "$URL" "$CUT_OFF_TIME" "$OUT_DIR"
-
-        while /bin/true; do
-#            echo "Folder-sync waiting for new files..." 2>&1>>$LOG
-            sleep "$SLEEP"
-            checkAndDownload "$URL" "$CUT_OFF_TIME" "$OUT_DIR" 2>&1>>$LOG
-            CUT_OFF_TIME=$(getTimeMarker "$OUT_DIR") #update time marker
-        done &
-
-        echo "service started"
-}
 
 ###########################
 # main
 ###########################
 
+# shellcheck disable=SC2034
 CMD_ARGS=("$@")
 declare -A ARGS_MAP
 parseArgs CMD_ARGS ARGS_MAP
@@ -403,10 +381,6 @@ LOG=${ARGS_MAP[LOG]:-"$OUT_DIR/log.txt"}
 trap clean SIGINT SIGTERM
 trap "exit" INT TERM ERR
 #trap "kill 0" EXIT # terminated all jobs on exit
-
-# start process
-# cygwin needs to have procps-ng package to support pgrep (https://cygwin.com/packages/summary/procps-ng.html)
-#echo "$BASHPID Started the job with PID $(getcpid $BASHPID)"
 
 
 # logo
