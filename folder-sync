@@ -116,13 +116,13 @@ function stop {
         CYGPID=$(procps -wwFAH | grep -v "grep" | grep "folder-sync" | cut -c 10-15)
         echo -e "Stopping CYGWIN PID(s)"
         echo "$CYGPID"
-        kill -s SIGTERM $(procps -wwFAH | grep -v "grep" | grep "folder-sync" | cut -c 10-15) 2>&1 /dev/null
+        kill -s SIGTERM $(procps -wwFAH | grep -v "grep" | grep "folder-sync"  | tr -s ' ' | cut -d ' ' -f 2) 2>&1 /dev/null
     fi
 }
 
 #Cleanup on kill
 function clean {
-  print "${ansi_red}Download failed! Cleaning..."
+  print "${ansi_red}Download failed! Cleaning...${ansi_std}"
   kill 0
   rm -Rf "$OUT_DIR/wrk"
   exit 1
@@ -187,26 +187,13 @@ function getSourceLastModifiedDate() {
     return
 }
 
-function getDestinationLastModifiedDate() {
-    local destDir=$1
-    local last=$(find $destDir -type f -printf '%T@ %p\n' | sort -n | tail -1)
-
-    [ -n "$last" ] || return
-
-    file=(${last// / })
-
-    echo "$(date -d "@${file[0]}" '+%s')"
-    return
-}
-
 function getTimeMarker() {
-    local latest=$(find "$1" -type f -printf '%T@ %p\n' | sort -n | tail -1)
+    local latest=$(find "$1" -type f -printf '%T@ %p\n' | sort -n | tail -1 | cut -d ' ' -f 1)
 
     if [ -z ${latest+_} ]; then
       echo "$(date '+%s')"
     else
-      file=(${latest// / })
-      echo "$(date -d "@${file[0]}" '+%s')"
+      echo "$(date -d "@$latest" '+%s')"
     fi
 
     return
