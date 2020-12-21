@@ -100,7 +100,7 @@ parseArgs() {
         -p | --password) __argsmap[PWD]=$2  ; shift 2 ;;
         -l | --logfile)  __argsmap[LOG]=$2  ; shift 2 ;;
         -b ) __argsmap[SERVICE]=1; __argsmap[SLEEP]=$2; shift 2 ;;
-        -m | --marker)   __argsmap[MARKER]=$(date -d "@$2" '+%s'); shift 2 ;;
+        -m | --marker)   __argsmap[MARKER]=$(date -d "$2" '+%s'); shift 2 ;;
         --) shift; break ;;
         *) echo "Unexpected option: $1" ; usage ;;
       esac
