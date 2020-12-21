@@ -1,5 +1,6 @@
 #!/bin/bash
 #set -e
+#set -x
 
 #     ____     __   __        ____
 #    / __/__  / /__/ /__ ____/ __/_ _____  ____
@@ -23,12 +24,11 @@ ansi_bl2='\033[1;36m'
 ansi_std='\033[0;37m'
 
 #trap "error reported  ${LINENO}" ERR
-exec 3>&1 4>&2 #set up extra file descriptors
-
-#{ ERR_MSG="$( { mv "${WRK_DIR}/${NAME}.2" "$DEST/$NAME"; } 2>&1 1>&3 3>&- )"; } 3>&1;
+#exec 3>&1 4>&2 #set up extra file descriptors
 function catch-stderr() {
     local -n v="$1";
     shift && { v="$("$@" 2>&1 1>&3 3>&-)"; } 3>&1;
+    echo $v
 }
 
 function catch-stderr2() {
@@ -272,12 +272,24 @@ function calcProgress() {
         local PCT=$(( ( COMPLETED*100 ) / FILE_SIZE ))
         local STATUS
         if [[ $PCT -lt 100 ]]; then STATUS="...${ansi_yel}Downloading${ansi_std}"; else STATUS="...${ansi_grn}Completed${ansi_std}"; fi
-
-        local msg="$action $FILE_NAME in $CHUNKS part(s): $((COMPLETED/units)) / $((FILE_SIZE/units)) $scale @ $((RATE)) $scale/s ($PCT%).......$STATUS"
+        if [[ $action == 'Canceled' ]]; then STATUS="...${ansi_red}FAILED${ansi_red}"; fi
+        local msg=" - $FILE_NAME in $CHUNKS part(s): $((COMPLETED/units)) / $((FILE_SIZE/units)) $scale @ $((RATE)) $scale/s ($PCT%).......$STATUS           "
         echo -en "$msg"
-#        tput ech ${#__size} # erase the last reported size value
-#        tput cub 1000 # move 1000 chars left
+
   return
+}
+
+function runJob() {
+    local job_pid=$1
+    ({
+        local _err
+        shift && { _err="$("$@" 2>&1 1>&3 3>&-)"; } 3>&1;
+        echo "$_err"
+        [ "$_err" != '' ] && { echo "$_err"; return $_err; }
+    }  ) &
+
+    eval "$job_pid"="$!"
+    return
 }
 
 function download() {
@@ -289,16 +301,14 @@ function download() {
 
     WRK_DIR="$DEST/wrk"
     mkdir -p "$WRK_DIR" ; chmod 755 "$WRK_DIR"
-    [ -d "$OUT_DIR" ] || print "ERROR: Cannot create working directory [$WRK_DIR]. Please check destination permissions"
+    [ -d "$OUT_DIR" ] || { print "ERROR: Cannot create working directory [$WRK_DIR]. Please check permissions"; exit; }
 
-    curl -R --ftp-pasv -u "$USER:$PWD+" -o "${WRK_DIR}/${NAME}.1" "$SRC/$NAME" 2> /dev/null &
-#    [ $? -ne 0 ] && clean "$ERR_MSG"
+#    [[ $NAME == 'BCDriverMerge.exe' ]] && NAME='xBCDriverMerge.exe'
+#    curl --head --location --connect-timeout 5 --write-out "%{http_code}\n" -sS -R --ftp-pasv -u "$USER:$PWD" -o "${WRK_DIR}/${NAME}.1" "$SRC/$NAME" 2>&1>/dev/null &
 
-#    echo "Job details: $(jobs -x)"
-
+    curl -s -R --ftp-pasv -u "$USER:$PWD" -o "${WRK_DIR}/${NAME}.1" "$SRC/$NAME" 2>&1>/dev/null &
     # Wait for the job to complete while showing progress
     TIME=$(( $(date +%s)-1 ))
-    echo
     while jobs | grep -q Running ;
     do
         sleep 1
@@ -307,15 +317,22 @@ function download() {
         tput cub 1000 # move 1000 chars left
     done
 
-    calcProgress "Completed"  "$WRK_DIR" "$NAME" "$SPLIT_NUM" "$size" "$TIME"
+    job_err=$(jobs | awk '/Exit/ {print $3}')
+    if [ "$job_err" == '' ]; then status='Completed'; else status='Canceled'; ((ERR++)); fi
+    calcProgress "$status" "$WRK_DIR" "$NAME" "$SPLIT_NUM" "$size" "$TIME"
     echo
-    echo "Job $(jobs)"
 
     ERR_MSG=$(catch-stderr2 mv "${WRK_DIR}/${NAME}.1" "$DEST/$NAME")
 
     [ $? -ne 0 ] && clean "$ERR_MSG"
 
     [ "$DELETE_REMOTE_FILE" = "y" ]  && curl -u "$USER:$PWD" "$SRC" -Q"DELE $file_path/$NAME" 2> /dev/null
+}
+
+
+
+function print() {
+  echo -e "$1 $2"
 }
 
 function print() {
@@ -350,6 +367,7 @@ function checkAndDownload() {
 ###########################
 
 # shellcheck disable=SC2034
+ERR=0
 CMD_ARGS=("$@")
 declare -A ARGS_MAP
 parseArgs CMD_ARGS ARGS_MAP
@@ -430,6 +448,11 @@ then
 else
     echo -e "${ansi_grn}Folder-sync running...${ansi_std}"
     checkAndDownload "$URL" "$CUT_OFF_TIME" "$OUT_DIR"
-    echo -e "${ansi_grn}Folder-sync completed${ansi_std}"
+    if [[ ERR -eq 0 ]]
+    then
+        echo -e "${ansi_grn}Folder-sync completed${ansi_std}"
+    else
+        echo -e "${ansi_yel}Folder-sync completed with errors${ansi_std}"
+    fi
     rm -Rf "$OUT_DIR/wrk"
 fi
