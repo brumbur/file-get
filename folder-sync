@@ -202,7 +202,7 @@ function getDirectoryContent() {
 # returns the last modified time for the file provided in the URL
 function getSourceLastModifiedDate() {
     local dt
-    dt=$(curl -I -u "$USER:$PWD" "$1" 2>&1 | awk '/Last-Modified:/ {sub("\r",""); print  $2,$3,$4,$5,$6,$7}')
+    dt=$(curl -s -I -u "$USER:$PWD" "$1" 2>&1 | awk '/Last-Modified:/ {sub("\r",""); print  $2,$3,$4,$5,$6,$7}')
     echo "$(date -d "${dt}" '+%s')" # convert to ms
     return
 }
@@ -231,7 +231,7 @@ function getNewFiles() {
 
     # shellcheck disable=SC2068
     for f in ${__arr[@]}; do
-        #echo "f: [$f]" # todo check file is not empty
+        # echo "f: [$f]" # todo check file is not empty
         lmd=$(getSourceLastModifiedDate "$url/$f") #todo verify lmd is not empty
         [ -n "$lmd" ] || continue
         if [ "$cutoff" -ge "$lmd" ]; then
@@ -306,6 +306,7 @@ function download() {
 #    [[ $NAME == 'BCDriverMerge.exe' ]] && NAME='xBCDriverMerge.exe'
 #    curl --head --location --connect-timeout 5 --write-out "%{http_code}\n" -sS -R --ftp-pasv -u "$USER:$PWD" -o "${WRK_DIR}/${NAME}.1" "$SRC/$NAME" 2>&1>/dev/null &
 
+    # echo "curl -s -R --ftp-pasv -u $USER:$PWD -o ${WRK_DIR}/${NAME}.1 $SRC/$NAME"
     curl -s -R --ftp-pasv -u "$USER:$PWD" -o "${WRK_DIR}/${NAME}.1" "$SRC/$NAME" 2>&1>/dev/null &
     # Wait for the job to complete while showing progress
     TIME=$(( $(date +%s)-1 ))
@@ -322,18 +323,15 @@ function download() {
     calcProgress "$status" "$WRK_DIR" "$NAME" "$SPLIT_NUM" "$size" "$TIME"
     echo
 
-    ERR_MSG=$(catch-stderr2 mv "${WRK_DIR}/${NAME}.1" "$DEST/$NAME")
+    mv "$WRK_DIR/$NAME.1" "$DEST/$NAME"
+#    ERR_MSG=$(catch-stderr2 mv "${WRK_DIR}/${NAME}.1" "$DEST/$NAME")
 
-    [ $? -ne 0 ] && clean "$ERR_MSG"
+#    [ $? -ne 0 ] && clean "$ERR_MSG"
 
     [ "$DELETE_REMOTE_FILE" = "y" ]  && curl -u "$USER:$PWD" "$SRC" -Q"DELE $file_path/$NAME" 2> /dev/null
 }
 
 
-
-function print() {
-  echo -e "$1 $2"
-}
 
 function print() {
   echo -e "$1 $2"
@@ -361,6 +359,9 @@ function checkAndDownload() {
     return
 }
 
+function main {
+   echo "TBD"
+}
 
 ###########################
 # main
@@ -373,7 +374,7 @@ declare -A ARGS_MAP
 parseArgs CMD_ARGS ARGS_MAP
 
 #todo verbose option
-for K in "${!ARGS_MAP[@]}"; do echo "[$K] : [${ARGS_MAP[$K]}]"; done
+#for K in "${!ARGS_MAP[@]}"; do echo "[$K] : [${ARGS_MAP[$K]}]"; done
 
 # validate required arguments
 [ ${ARGS_MAP[URL]+_} ] ||  usage "-s | --source"
@@ -454,5 +455,5 @@ else
     else
         echo -e "${ansi_yel}Folder-sync completed with errors${ansi_std}"
     fi
-    rm -Rf "$OUT_DIR/wrk"
+#    rm -Rf "$OUT_DIR/wrk"
 fi
