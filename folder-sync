@@ -23,12 +23,11 @@ ansi_cyn='\033[1;35m'
 ansi_bl2='\033[1;36m'
 ansi_std='\033[0;37m'
 
-#trap "error reported  ${LINENO}" ERR
 #exec 3>&1 4>&2 #set up extra file descriptors
 function catch-stderr() {
     local -n v="$1";
     shift && { v="$("$@" 2>&1 1>&3 3>&-)"; } 3>&1;
-    echo $v
+    echo "$v"
 }
 
 function catch-stderr2() {
@@ -43,8 +42,6 @@ function catch-stderr2() {
         return 0
     fi
 }
-
-
 
 function usage() {
     [ "$1" = "" ] || echo -e "\n\t${ansi_red}ERROR: \"$1\" is a required argument but is missing or is invalid${ansi_std}"
@@ -103,8 +100,6 @@ parseArgs() {
     __parsed=$(getopt -a -n folder_sync -o "$flags" --long "$ops" -- "${__cmdargs[@]}")
     [ $? -ne 0 ] && usage
 
-#    printf "parsed args: [%s]\n" "${__parsed[@]}"
-
     eval set -- "$__parsed"
     while :
     do
@@ -137,10 +132,10 @@ function stop {
         killall -r folder-sync
     else
         #cygwin
-        CYGPID=$(procps -wwFAH | grep -v "grep" | grep "folder-sync" | cut -c 10-15)
+        CYG_PID=$(procps -wwFAH | grep -v "grep" | grep "folder-sync" | cut -c 10-15)
         echo -e "Stopping CYGWIN PID(s)"
-        echo "$CYGPID"
-        kill -s SIGTERM $(procps -wwFAH | grep -v "grep" | grep "folder-sync"  | tr -s ' ' | cut -d ' ' -f 2) 2>&1 /dev/null
+        echo "$CYG_PID"
+        kill -s SIGTERM "$(procps -wwFAH | grep -v "grep" | grep "folder-sync"  | tr -s ' ' | cut -d ' ' -f 2)" 2>&1 /dev/null
     fi
 }
 
@@ -227,8 +222,6 @@ function getNewFiles() {
     local cutoff=$3
     local lmd
 
-    print "Checking location" "$url"
-
     # shellcheck disable=SC2068
     for f in ${__arr[@]}; do
         # echo "f: [$f]" # todo check file is not empty
@@ -238,9 +231,10 @@ function getNewFiles() {
             print "\t(-) $f is old - skipped"
             __arr=("${__arr[@]/$f}") # remove old file
         else
-          print "\t(+) $f is newer - downloading"
+          print "(+) $f is newer - downloading"
         fi
     done
+    print ""
     return
 }
 
@@ -270,11 +264,18 @@ function calcProgress() {
         local ELAPSED=$(( $(date +%s) - TIME ))
         local RATE=$(( ( COMPLETED / ELAPSED )/units ))
         local PCT=$(( ( COMPLETED*100 ) / FILE_SIZE ))
+
         local STATUS
-        if [[ $PCT -lt 100 ]]; then STATUS="...${ansi_yel}Downloading${ansi_std}"; else STATUS="...${ansi_grn}Completed${ansi_std}"; fi
-        if [[ $action == 'Canceled' ]]; then STATUS="...${ansi_red}FAILED${ansi_red}"; fi
-        local msg=" - $FILE_NAME in $CHUNKS part(s): $((COMPLETED/units)) / $((FILE_SIZE/units)) $scale @ $((RATE)) $scale/s ($PCT%).......$STATUS           "
-        echo -en "$msg"
+        if [[ $PCT -lt 100 ]]; then STATUS="......${ansi_yel}Downloading${ansi_std}"; else STATUS="......${ansi_grn}Completed${ansi_std}"; fi
+        if [[ $action == 'Canceled' ]]; then STATUS="......${ansi_red}FAILED${ansi_std}"; fi
+
+#        local msg="$action $FILE_NAME: $((COMPLETED/units)) / $((FILE_SIZE/units)) $scale @ $((RATE)) $scale/s ($PCT%).......$STATUS           "
+#        echo -en "$msg"
+
+        printf  "%-15b" $action
+        printf "%-30s" $FILE_NAME
+        printf "%6s / %-6s %2s @ %6s %3s/cek (%3s%%)" $((COMPLETED/units)) $((FILE_SIZE/units)) $scale $((RATE)) $scale $PCT
+        printf "%-25b           " $STATUS
 
   return
 }
@@ -285,7 +286,7 @@ function runJob() {
         local _err
         shift && { _err="$("$@" 2>&1 1>&3 3>&-)"; } 3>&1;
         echo "$_err"
-        [ "$_err" != '' ] && { echo "$_err"; return $_err; }
+        [ "$_err" != '' ] && { echo "$_err"; return 1; }
     }  ) &
 
     eval "$job_pid"="$!"
@@ -303,35 +304,32 @@ function download() {
     mkdir -p "$WRK_DIR" ; chmod 755 "$WRK_DIR"
     [ -d "$OUT_DIR" ] || { print "ERROR: Cannot create working directory [$WRK_DIR]. Please check permissions"; exit; }
 
-#    [[ $NAME == 'BCDriverMerge.exe' ]] && NAME='xBCDriverMerge.exe'
-#    curl --head --location --connect-timeout 5 --write-out "%{http_code}\n" -sS -R --ftp-pasv -u "$USER:$PWD" -o "${WRK_DIR}/${NAME}.1" "$SRC/$NAME" 2>&1>/dev/null &
+    # [[ $NAME == 'BCDriverMerge.exe' ]] && NAME=' BCDriverMerge.exe' # just for testing
+    # curl --head --location --connect-timeout 5 --write-out "%{http_code}\n" -sS -R --ftp-pasv -u "$USER:$PWD" -o "${WRK_DIR}/${NAME}.1" "$SRC/$NAME" 2>&1>/dev/null &
 
-    # echo "curl -s -R --ftp-pasv -u $USER:$PWD -o ${WRK_DIR}/${NAME}.1 $SRC/$NAME"
-    curl -s -R --ftp-pasv -u "$USER:$PWD" -o "${WRK_DIR}/${NAME}.1" "$SRC/$NAME" 2>&1>/dev/null &
+    curl -s -R --ftp-pasv -u "$USER:$PWD" -o "${WRK_DIR}/${NAME}.1" "$SRC/$NAME" >/dev/null 2>&1 &
     # Wait for the job to complete while showing progress
     TIME=$(( $(date +%s)-1 ))
     while jobs | grep -q Running ;
     do
         sleep 1
-        calcProgress "Downloading" "$WRK_DIR" "$NAME" "$SPLIT_NUM" "$size" "$TIME"
+        calcProgress "Processing" "$WRK_DIR" "$NAME" "$SPLIT_NUM" "$size" "$TIME"
         tput ech ${#__size} # erase the last reported size value
         tput cub 1000 # move 1000 chars left
     done
 
     job_err=$(jobs | awk '/Exit/ {print $3}')
-    if [ "$job_err" == '' ]; then status='Completed'; else status='Canceled'; ((ERR++)); fi
-    calcProgress "$status" "$WRK_DIR" "$NAME" "$SPLIT_NUM" "$size" "$TIME"
+    if [ "$job_err" == '' ]; then action='Processed'; else action='Canceled'; ((ERR++)); fi
+    calcProgress "$action" "$WRK_DIR" "$NAME" "$SPLIT_NUM" "$size" "$TIME"
     echo
 
-    mv "$WRK_DIR/$NAME.1" "$DEST/$NAME"
+    mv "$WRK_DIR/$NAME.1" "$DEST/$NAME" 2> /dev/null
 #    ERR_MSG=$(catch-stderr2 mv "${WRK_DIR}/${NAME}.1" "$DEST/$NAME")
 
 #    [ $? -ne 0 ] && clean "$ERR_MSG"
 
-    [ "$DELETE_REMOTE_FILE" = "y" ]  && curl -u "$USER:$PWD" "$SRC" -Q"DELE $file_path/$NAME" 2> /dev/null
+    [ "$DELETE_REMOTE_FILE" = "y" ]  && curl -u "$USER:$PWD" "$SRC" -Q"DELETE $SRC/$NAME" 2> /dev/null
 }
-
-
 
 function print() {
   echo -e "$1 $2"
@@ -343,11 +341,10 @@ function checkAndDownload() {
     local __out="$3"
     local -a files
 
-    print "Checking for new files as off [$(date -d @$__time)] in [$__url]"
+    print ""
+    print "Checking for new files as off [$(date -d @"$__time")] in [$__url]"
     getDirectoryContent files "$__url"
-#    print "Found: " "${files[@]}"
     getNewFiles files "$__url" "$__time"
-#    print "New files to download: " "$(( ${#files[@]}-1 ))"
 
     # shellcheck disable=SC2068
     # shellcheck disable=SC2155
@@ -444,8 +441,8 @@ then
         sleep "$SLEEP"
 
         CUT_OFF_TIME=$(getTimeMarker "$OUT_DIR") #update time marker
-#    done 2>&1>>"$LOG" &
-    done &); }  2>&1>>"$LOG"
+#    done >>"$LOG" 2>&1 &
+    done &); }>>"$LOG" 2>&1
 else
     echo -e "${ansi_grn}Folder-sync running...${ansi_std}"
     checkAndDownload "$URL" "$CUT_OFF_TIME" "$OUT_DIR"
@@ -455,5 +452,5 @@ else
     else
         echo -e "${ansi_yel}Folder-sync completed with errors${ansi_std}"
     fi
-#    rm -Rf "$OUT_DIR/wrk"
+    rm -Rf "$OUT_DIR/wrk"
 fi
