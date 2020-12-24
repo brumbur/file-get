@@ -1,6 +1,6 @@
 #!/bin/bash
 #set -e
-#set -x
+set -x
 
 #     ____     __   __        ____
 #    / __/__  / /__/ /__ ____/ __/_ _____  ____
@@ -307,7 +307,8 @@ function download() {
     # [[ $NAME == 'BCDriverMerge.exe' ]] && NAME=' BCDriverMerge.exe' # just for testing
     # curl --head --location --connect-timeout 5 --write-out "%{http_code}\n" -sS -R --ftp-pasv -u "$USER:$PWD" -o "${WRK_DIR}/${NAME}.1" "$SRC/$NAME" 2>&1>/dev/null &
 
-    curl -s -R --ftp-pasv -u "$USER:$PWD" -o "${WRK_DIR}/${NAME}.1" "$SRC/$NAME" >/dev/null 2>&1 &
+#    curl -s -R --ftp-pasv -u "$USER:$PWD" -o "${WRK_DIR}/${NAME}.1" "$SRC/$NAME" >/dev/null 2>&1 &
+        { read readit < <(curl --write-out "%{http_code}\n" -sS -R --ftp-pasv -u "$USER:$PWDm" -o "${WRK_DIR}/${NAME}.1" "$SRC/$NAME" 2>&1); echo "read [$readit]"; } &
     # Wait for the job to complete while showing progress
     TIME=$(( $(date +%s)-1 ))
     while jobs | grep -q Running ;
@@ -454,3 +455,5 @@ else
     fi
     rm -Rf "$OUT_DIR/wrk"
 fi
+
+
