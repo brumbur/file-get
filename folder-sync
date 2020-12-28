@@ -69,7 +69,7 @@ function help {
         stop    stop the background process (applicable only for -b option)
 
     Required:
-        -s , --source     set the FTP source URL (with port if not using 21) along with the path i.e. \"ftp://192.168.1.1/ftp/root/_files\"
+        -s , --source     set the FTP source URL along with the path i.e. \"ftp://192.168.1.1/ftp/root/_files\"
         -d , --dest       set the destination directory
         -u , --user       set user name
 
@@ -127,10 +127,10 @@ function stop {
         killall -r folder-sync
     else
         #cygwin
-        CYG_PID=$(procps -wwFAH | grep -v "grep" | grep "folder-sync" | cut -c 10-15)
+        CYG_PID="$(procps -wwFAH | grep -v "grep" | grep "folder-sync"  | tr -s ' ' | cut -d ' ' -f 2)"
         echo -e "Stopping CYGWIN PID(s)"
         echo "$CYG_PID"
-        kill -s SIGTERM "$(procps -wwFAH | grep -v "grep" | grep "folder-sync"  | tr -s ' ' | cut -d ' ' -f 2)" 2>&1 /dev/null
+        kill -s SIGTERM "$CYG_PID" 2>&1 /dev/null
     fi
 }
 
@@ -197,9 +197,9 @@ function getDirectoryContent() {
 
     #todo error checking & reporting
     # shellcheck disable=SC2034
-    _arr=("$(curl -s -u "$USER:$PWD" "$_url/" | sed -nr 's/(^-[ rw-].*)( *)([0-9])(.*)/\4/p' | sed -e 's/^ //g' | sed -e 's/ /\ /g')")
-
-    return
+    _arr=("$(curl -s -u "$USER:$PWD" "$_url/" | \
+        sed -nr 's/(^-[ rw-].*)( *)([0-9])(.*)/\4/p' | \
+        sed -e 's/^ //g' | sed -e 's/ /\ /g')")
 }
 
 # returns the last modified time for the file provided in the URL
@@ -264,7 +264,8 @@ function showProgress() {
     [[ $file_size -ge $gb ]] && { units=$mb; scale="Mb"; }
     [[ $file_size -gt $gb ]] && { units=$gb; scale="Gb"; }
 
-    local completed=$(( $(eval ls -l "$directory/$file_name.{1..$chunks}" 2> /dev/null | awk 'BEGIN{s=0}{s+=$5}END{print s}') ))
+    local completed=$(( $(eval ls -l "$directory/$file_name.{1..$chunks}" 2> /dev/null | \
+        awk 'BEGIN{s=0}{s+=$5}END{print s}') ))
     local elapsed=$(( $(date +%s) - time ))
     local rate=$(( ( completed / elapsed )/units ))
     local pct=$(( ( completed*100 ) / file_size ))
@@ -289,7 +290,10 @@ function downloadFile() {
 
     WRK_directory="$DEST/wrk"
     mkdir -p "$WRK_directory" ; chmod 755 "$WRK_directory"
-    [ -d "$OUT_directory" ] || { print "ERROR: Cannot create working directory [$WRK_directory]. Please check permissions"; exit; }
+    [ -d "$OUT_directory" ] || {
+        print "ERROR: Cannot create working directory [$WRK_directory]. Please check permissions";
+        exit;
+    }
 
      [[ $NAME == 'BCDriverMerge.exe' ]] && NAME='*BCDriverMerge.exe' # just for testing
     # curl --write-out "%{http_code}\n" -sS -R --ftp-pasv -u "$USER:$PWD" -o "${WRK_directory}/${NAME}.1" "$SRC/$NAME" >/dev/shm/fs 2>&1 &
@@ -365,8 +369,6 @@ function main {
 CMD_ARGS=("$@")
 declare -A ARGS_MAP
 parseArgs CMD_ARGS ARGS_MAP
-
-#todo verbose option
 #for K in "${!ARGS_MAP[@]}"; do echo "[$K] : [${ARGS_MAP[$K]}]"; done
 
 
