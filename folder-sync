@@ -1,15 +1,34 @@
 #!/bin/bash
 
+#exec 3>&1 4>&2
+#trap 'exec 2>&4 1>&3' 0 1 2 3
+#exec 1>log.out 2>&1
+
 #(set -o igncr) 2>/dev/null && set -o igncr; # cygwin specific shell options
 #set -e
 #set -x
+
+SCRIPTS_LOGS_ROOT=.
+
+# no local logging if nested call
+(( ! IMPL_MODE && ! NEST_LVL )) && {
+    export IMPL_MODE=1
+    exec 3>&1 4>&2
+    trap 'exec 2>&4 1>&3' EXIT HUP INT QUIT RETURN
+
+    [[ ! -e "${SCRIPTS_LOGS_ROOT}/.log" ]] && mkdir "${SCRIPTS_LOGS_ROOT}/.log"
+
+    # RANDOM instead of milliseconds
+#    printf -v LOG_FILE_NAME_SUFFIX "%(%Y_%m_%d_%H_%M_%S_)T$(( RANDOM % 1000 ))" -1
+    printf -v LOG_FILE_NAME_SUFFIX "%(%Y_%m_%d)T" -1
+    (
+    (
 
 #     ____     __   __        ____
 #    / __/__  / /__/ /__ ____/ __/_ _____  ____
 #   / _// _ \/ / _  / -_) __/\ \/ // / _ \/ __/
 #  /_/  \___/_/\_,_/\__/_/ /___/\_, /_//_/\__/
 #                              /___/
-#
 
 ###########################
 # functions
@@ -284,7 +303,7 @@ function showProgress() {
 
     printf  "%-15b" "$action"
     printf "%-30s" "$file_name"
-    printf "%6s / %-6s %2s @ %6s %3s/cek (%3s%%)" $((completed/units)) $((file_size/units)) $scale $((rate)) $scale $pct
+    printf "%6s / %-6s @ %6s %3s/sec (%3s%%)" $((completed/units)) $((file_size/units)) $((rate)) $scale $pct
     printf "%-25b" "......$status"
     if [[ $action == 'Canceled' ]]; then printf "%40s" "[$err]"; fi
 }
@@ -459,3 +478,13 @@ else
 fi
 
 
+# end of logging wrapper function
+    # self script reentrance...
+    exec $0 "$@"
+    ) | tee -a "${SCRIPTS_LOGS_ROOT}/.log/folder-sync.${LOG_FILE_NAME_SUFFIX}.log" 2>&1
+    ) 1>&3 2>&4
+
+    exit $?
+}
+
+(( NEST_LVL++ ))
