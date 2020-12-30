@@ -1,7 +1,5 @@
 #!/bin/bash
 (set -o igncr) 2>/dev/null && set -o igncr; # cygwin specific shell options
-#set -e
-#set -x
 
 #     ____     __   __        ____
 #    / __/__  / /__/ /__ ____/ __/_ _____  ____
@@ -18,7 +16,6 @@
 # functions
 ###########################
 
-#exec 3>&1 4>&2 #set up extra file descriptors
 function catchStdErr2() {
     local -n v="$1";
     shift && { v="$("$@" 2>&1 1>&3 3>&-)"; } 3>&1;
@@ -51,25 +48,25 @@ function usage() {
 
 function help {
    echo -e "${s}
-    Monitors an FTP directory and downloads all new _files as per the provided options.
 
-    Note that there are three options for identifying \"new\" _files:
-        1. Any file newer that the last file downloaded in the destination directory
-        2. Any file newer than the script start time if there are no _files in the destination directory
-        3. Any file newer than the time marker provided with the -m option e.g. -m \"yesterday\"
-            see GNU documentation for all accepted formats:
-            https://www.gnu.org/software/coreutils/manual/html_node/Date-input-formats.html#Date-input-formats
+    Description:
+        Connect to an FTP directory and downloads all new files as per the provided options.
 
-    To continuously download new _files, use the -b option
+        Note that there are three ways for identifying \"new\" files:
+            1. Any file newer that the last file downloaded in the destination directory
+            2. Any file newer than the script start time if there are no files in the destination directory
+            3. Any file newer than the time marker provided with the -m option e.g. -m \"yesterday\"
+                see GNU documentation for all accepted time formats:
+                https://www.gnu.org/software/coreutils/manual/html_node/Date-input-formats.html#Date-input-formats
 
-    Usage:
+        To continuously download new files, use the -b option
 
     Commands:
         start   execute the script
         stop    stop the background process (applicable only for -b option)
 
     Required:
-        -s , --source     set the FTP source URL along with the path i.e. \"ftp://192.168.1.1/ftp/root/_files\"
+        -s , --source     set the FTP source URL along with the path i.e. \"ftp://192.168.1.1/ftp/root/files\"
         -d , --dest       set the destination directory
         -u , --user       set user name
 
@@ -78,6 +75,9 @@ function help {
         -m , --marker     custom cut-off time marker
         -l , --logfile    log file
         -R                when provided will delete the file from the source location
+        -O                force overwrite when file with the same name already exists
+                              (by default will overwrite only when the files have same size and modify dates)
+        -k                never overwrite when file with the same name already exists
         -v                show verbose output
         -q                don't show any output
         -b                run in the background"
@@ -89,7 +89,7 @@ parseArgs() {
     declare -n __cmdargs=$1
     declare -n __argsmap=$2
 
-    local flags="hvqRb:s:d:u:p:m:l:"
+    local flags="kOhvqRb:s:d:u:p:m:l:"
     local ops="start,stop,help,source:,dest:,user:,password:,marker:logfile:"
 
     __parsed=$(getopt -a -n folder_sync -o "$flags" --long "$ops" -- "${__cmdargs[@]}")
@@ -100,16 +100,18 @@ parseArgs() {
     do
       case "$1" in
         # flags
-        -R ) __argsmap[REM_FILE]="y" ; shift ;;
-        -v ) __argsmap[LEVEL]=3      ; shift ;;
-        -q ) __argsmap[LEVEL]=1      ; shift ;;
-        --start ) __argsmap[CMD]="START"; shift ;;
+        -R ) __argsmap[REM_FILE]="y"     ; shift ;;
+        -O ) __argsmap[KEEP]="n"         ; shift ;;
+        -k ) __argsmap[KEEP]="y"         ; shift ;;
+        -v ) __argsmap[LEVEL]=3          ; shift ;;
+        -q ) __argsmap[LEVEL]=1          ; shift ;;
+        --start ) __argsmap[CMD]="START" ; shift ;;
         --stop ) stop ;;
 
         # options
         -h | --help) help ;;
         -s | --source)   __argsmap[URL]=$2  ; shift 2 ;;
-        -d | --dest)     __argsmap[DEST]=$2 ; shift 2 ;;
+        -d | --dest)     __argsmap[dest_dir]=$2 ; shift 2 ;;
         -u | --user)     __argsmap[USER]=$2 ; shift 2 ;;
         -p | --password) __argsmap[PWD]=$2  ; shift 2 ;;
         -l | --logfile)  __argsmap[LOG]=$2  ; shift 2 ;;
@@ -156,15 +158,13 @@ function runJob() {
 }
 
 function getPassword() {
-    local __pwd="$1"
+    local pwd="$1"
     local password
 
     echo -n "Enter password: "
     while IFS= read -p "$prompt" -r -s -n 1 char
     do
-        if [[ $char == $'\0' ]] ; then
-            break
-        fi
+        if [[ $char == $'\0' ]] ; then break; fi
 
         # handle backspace
         if [[ $char == $'\177' ]] ; then
@@ -176,10 +176,8 @@ function getPassword() {
         fi
     done
 
-    eval "$__pwd"="$password"
+    eval "$pwd"="$password"
     echo
-
-    return
 }
 
 # get the file details and parse the size
@@ -187,17 +185,16 @@ function getSize() {
     local _size="$(curl -u "$USER:$PWD" -qIL "$1" 2> /dev/null | awk '/Length/ {print $2}'|grep -o '[0-9]*')"
     local _size=${_size:-1}
     echo "$_size"
-    return
 }
 
-# takes an _array reference and updates it with the file names in the given directory
+# takes an array reference and updates it with the file names in the given directory
 function getDirectoryContent() {
-    local -n _arr=$1
-    local _url="$2"
+    local -n arr=$1
+    local url="$2"
 
     #todo error checking & reporting
     # shellcheck disable=SC2034
-    _arr=("$(curl -s -u "$USER:$PWD" "$_url/" | \
+    arr=("$(curl -s -u "$USER:$PWD" "$url/" | \
         sed -nr 's/(^-[ rw-].*)( *)([0-9])(.*)/\4/p' | \
         sed -e 's/^ //g' | sed -e 's/ /\ /g')")
 }
@@ -206,7 +203,6 @@ function getDirectoryContent() {
 function getSourceLastModifiedDate() {
     local _dt=$(curl -s -I -u "$USER:$PWD" "$1" 2>&1 | awk '/Last-Modified:/ {sub("\r",""); print  $2,$3,$4,$5,$6,$7}')
     echo "$(date -d "${_dt}" '+%s')" # convert to ms
-    return
 }
 
 function getTimeMarker() {
@@ -217,31 +213,28 @@ function getTimeMarker() {
     else
       echo "$(date -d "@$_latest" '+%s')"
     fi
-
-    return
 }
 
-# filters out any _files that are older than the _cutoff time
+# filters out any files that are older than the cutoff time
 function getNewFiles() {
     # shellcheck disable=SC2178
-    local -n _arr=$1
-    local _url=$2
-    local _cutoff=$3
-    local _lmd
+    local -n arr=$1
+    local url=$2
+    local cutoff=$3
+    local lmd
 
     # shellcheck disable=SC2068
-    for f in ${_arr[@]}; do
-        _lmd=$(getSourceLastModifiedDate "$_url/$f")
-        [ -n "$_lmd" ] || continue
-        if [ "$_cutoff" -ge "$_lmd" ]; then
+    for f in ${arr[@]}; do
+        lmd=$(getSourceLastModifiedDate "$url/$f")
+        [ -n "$lmd" ] || continue
+        if [ "$cutoff" -ge "$lmd" ]; then
             print "\t(-) $f is old - skipped"
-            _arr=("${_arr[@]/$f}") # remove old file
+            arr=("${arr[@]/$f}") # remove old file
         else
-          print "(+) $f is newer - downloading"
+            print "${g}\t(+) $f is newer - downloading${s}"
         fi
     done
-    print ""
-    return
+    echo
 }
 
 function showProgress() {
@@ -253,11 +246,7 @@ function showProgress() {
     local time="$6"
     local err="$7"
 
-    local kb=1024
-    local mb=1048576
-    local gb=1073741824
-    local units=$kb
-    local scale="Kb"
+    local kb=1024; local mb=1048576; local gb=1073741824; local units=$kb; local scale="Kb"
 
     [[ $file_size -eq 0 ]] && return
     [[ $file_size -ge $mb ]] && { units=$kb; scale="Kb"; }
@@ -282,29 +271,29 @@ function showProgress() {
 }
 
 function downloadFile() {
-    local SRC="$1"
-    local DEST="$2"
-    local NAME="$3"
+    local src_dir="$1"
+    local dest_dir="$2"
+    local file_name="$3"
     local size="$4"
-    local SPLIT_NUM=1 # only needed when downloading in multiple parts
+    local chunks=1 # only needed when downloading in multiple parts
 
-    WRK_directory="$DEST/wrk"
-    mkdir -p "$WRK_directory" ; chmod 755 "$WRK_directory"
-    [ -d "$OUT_directory" ] || {
-        print "ERROR: Cannot create working directory [$WRK_directory]. Please check permissions";
+    local wrk_dir="$dest_dir/.wrk"
+    mkdir -p "$wrk_dir"; chmod 755 "$wrk_dir"
+    [ -d "$wrk_dir" ] || {
+        print "ERROR: Cannot create working directory [$wrk_dir]. Please check permissions";
         exit;
     }
 
-     [[ $NAME == 'BCDriverMerge.exe' ]] && NAME='*BCDriverMerge.exe' # just for testing
-    # curl --write-out "%{http_code}\n" -sS -R --ftp-pasv -u "$USER:$PWD" -o "${WRK_directory}/${NAME}.1" "$SRC/$NAME" >/dev/shm/fs 2>&1 &
-    curl -sS -R --ftp-pasv -u "$USER:$PWD" -o "${WRK_directory}/${NAME}.1" "$SRC/$NAME" >/dev/shm/fs 2>&1 &
+#     [[ $file_name == 'BCDriverMerge.exe' ]] && file_name='*BCDriverMerge.exe' # just for testing
+    # curl --write-out "%{http_code}\n" -sS -R --ftp-pasv -u "$USER:$PWD" -o "${wrk_dir}/${file_name}.1" "$src_dir/$file_name" >/dev/shm/fs 2>&1 &
+    curl -sS -R --ftp-pasv -u "$USER:$PWD" -o "${wrk_dir}/${file_name}.1" "$src_dir/$file_name" >/dev/shm/fs 2>&1 &
 
     # Wait for the job to complete while showing progress
     time=$(( $(date +%s)-1 ))
     while jobs | grep -q Running ;
     do
         sleep 1
-        showProgress "Processing" "$WRK_directory" "$NAME" "$SPLIT_NUM" "$size" "$time"
+        showProgress "Processing" "$wrk_dir" "$file_name" "$chunks" "$size" "$time"
         tput ech ${#_size} # erase the last reported size value
         tput cub 1000 # move 1000 chars left
     done
@@ -313,20 +302,73 @@ function downloadFile() {
     job_err=$(jobs | awk '/Exit/ {print $3}') # or another way to get just the exit code
 
     if [ "$job_err" == '' ]; then
-        showProgress 'Processed' "$WRK_directory" "$NAME" "$SPLIT_NUM" "$size" "$time"
+        showProgress 'Processed' "$wrk_dir" "$file_name" "$chunks" "$size" "$time"
     else
-        showProgress 'Canceled' "$WRK_directory" "$NAME" "$SPLIT_NUM" "$size" "$time" "$job_response"
+        showProgress 'Canceled' "$wrk_dir" "$file_name" "$chunks" "$size" "$time" "$job_response"
         return 1
     fi
     echo # print line separator to complete the progress line
 
-    job_err=$(catchStdErr mv "${WRK_directory}/${NAME}.1" "$DEST/$NAME")
-    [ $? -ne 0 ] && return 1
+    # todo preserve modification date
+    err_msg=$(catchStdErr moveFile "$file_name" "$wrk_dir" "$dest_dir")
+#    [ $? != 0 ] && { echo "$err_msg"; return 2; }
+
+    return 0
+}
+
+function moveFile() {
+    local file_name="$1"
+    local source_dir="$2"
+    local target_dir="$3"
+
+    #Join all the parts
+    eval cat "$source_dir/$file_name".{1..1} > "$source_dir/$file_name.completed"
+    rm -f "$source_dir/$file_name".{1..1}
+
+    # just move it if there is no name conflict
+    if  [ "$KEEP" = 'n' ] || [ ! -f "$target_dir/$file_name" ]; then
+        err_msg=$(catchStdErr mv "${source_dir}/${file_name}.completed" "$target_dir/$file_name")
+        [ $? != 0 ] && { echo "$err_msg"; return 2; }
+        return 0
+    fi
+
+    # rename per the options provided
+    local overwrite=false
+
+    # if option set to 'auto' check for matching name, size, mod date and overwrite
+    if (( $(stat -c%s "$source_dir/$file_name.completed") == $(stat -c%s "$target_dir/$file_name") )); then
+        local same_size=true
+    fi
+
+    local new_file_date="$(date -d "$(stat "$source_dir/$file_name.completed" | awk '/Modify/ {print $2" "$3" "$4}')")"
+    local curr_file_date="$(date -d "$(stat "$target_dir/$file_name" | awk '/Modify/ {print $2" "$3" "$4}')")"
+    if [ "$new_file_date" = "$curr_file_date" ] ; then
+        local same_date=true
+    fi
+
+    if [ $same_size = "true" ] && [ $same_date = "true" ]; then overwrite=true; fi
+
+    local dest_name=$file_name
+
+    # if option set to 'never' generate new name
+    if [ "$KEEP" = 'y' ] || [ $overwrite = "false" ] ; then
+        local i=1
+        while [[ -f "$target_dir/$dest_name" ]]; do
+            dest_name="${file_name%.*}($(( i++ ))).${file_name##*.}"
+        done
+    fi
+
+    # move to the final destination using the new file name
+    err_msg=$(catchStdErr mv "${source_dir}/${file_name}.completed" "$target_dir/$dest_name")
+    [ $? != 0 ] && { echo "$err_msg"; return 2; }
+
+    return 0
 }
 
 function removeRemoteFile() {
-    err_msg=$(catchStdErr curl -u "$1***" "$2" -Q"DELETE $2/$3") 2> /dev/null
-    echo "removeRemoteFile: $err_msg"
+    local filepath="/$(echo "$2" | grep / | cut -d/ -f4-)"
+    err_msg=$(catchStdErr curl --ftp-pasv -s -u "$1" "$2/" -Q "DELE $filepath/$3") 2> /dev/null
+    echo "$err_msg"
 }
 
 function print() {
@@ -334,28 +376,29 @@ function print() {
 }
 
 function checkAndDownload() {
-    local _url="$1"
-    local _time="$2"
-    local _out="$3"
-    local -a _files
+    local url="$1"
+    local time="$2"
+    local out="$3"
+    local -a files
 
     print ""
-    print "Checking location [$_url] for files newer than [$(date -d @"$_time")]"
-    getDirectoryContent _files "$_url"
-    getNewFiles _files "$_url" "$_time"
+    print "Checking location [$url] for files newer than [$(date -d @"$time")]"
+    getDirectoryContent files "$url"
+    getNewFiles files "$url" "$time"
 
     # shellcheck disable=SC2068
     # todo support for parallel download
-    for f in ${_files[@]}; do
-        local _size=$(getSize "$_url/$f")
-        downloadFile "$_url" "$_out" "$f" "$_size"
-        err2=$?
-        [ $? -ne 0 ] && { (( ERR_FLAG++)); echo -e "${y}Error reported for file $f [$err2]${s}"; }
-
-        [ "$DELETE_REMOTE_FILE" = "y" ] && err_msg=$(removeRemoteFile "$USER:$PWD" "$SRC" "$NAME")
-        [ "$err_msg" != '' ] && { (( ERR_FLAG++)); echo -e "${y}Error reported for file $f [$err_msg]${s}"; }
+    for f in ${files[@]}; do
+        local _size=$(getSize "$url/$f")
+        downloadFile "$url" "$out" "$f" "$_size"
+        if [ $? -ne 0 ]; then
+            (( ERR_FLAG++))
+            echo -e "${y}Error reported when downloading file $f${s}"
+        elif  [ "$DELETE_REMOTE_FILE" = "y" ]; then
+            err_msg=$(removeRemoteFile "$USER:$PWD" "$url" "$f")
+            [ $? != 0 ] && { (( ERR_FLAG++)); echo -e "${y}Error reported for file $f [$err_msg]${s}"; }
+        fi
     done
-    return
 }
 
 function main {
@@ -411,15 +454,16 @@ ERR_FLAG=0
 # validate required arguments
 [ ${ARGS_MAP[URL]+_} ] ||  usage "-s | --source"
 [ ${ARGS_MAP[USER]+_} ] || usage "-u | --user"
-[ ${ARGS_MAP[DEST]+_} ] || usage "-d | --dest"
+[ ${ARGS_MAP[dest_dir]+_} ] || usage "-d | --dest"
 
 URL="${ARGS_MAP[URL]}"
 USER="${ARGS_MAP[USER]}"
 DELETE_REMOTE_FILE=${ARGS_MAP[REM_FILE]:-"n"}
+KEEP=${ARGS_MAP[KEEP]:-"a"} # yes / no  / only same size & date
 CMD=${ARGS_MAP[CMD]:-"START"}
 
 # validate destination
-OUT_directory=${ARGS_MAP[DEST]}
+OUT_directory=${ARGS_MAP[dest_dir]}
 if [ ! -d "$OUT_directory" ]; then mkdir -p 755 "$OUT_directory"; chmod 0755 "$OUT_directory"; fi
 [ -d "$OUT_directory" ] || usage "-d | --dest"
 
@@ -469,5 +513,5 @@ else
     else
         echo -e "${y}Folder-sync completed with errors${s}"
     fi
-    rm -Rf "$OUT_directory/wrk"
+#    rm -Rf "$OUT_directory/.wrk"
 fi
