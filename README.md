@@ -1,4 +1,3 @@
-# FolderSync
 ## TL;DR.:
 Simple script to download files from a remote FTP server
 
@@ -12,4 +11,4 @@ The result is a small utility that can monitor a remote FTP directory and downlo
 - Bash function override to customize built-in commands
 - Passing arrays as function arguments and function result
 - Redirecting standard output to catch errors and subshell output
-- Convenient and flexible arguments parsing wight getopt and associative arrays
+- Convenient and flexible arguments parsing with getopt and associative arrays
