@@ -140,7 +140,8 @@ function stop {
 
 #Cleanup on kill
 function clean() {
-    echo -F -e "${r}Download failed! ERROR is [$1]${s}"
+    builtin echo -e "${r}Download failed! $1${s}"
+    sleep 1 # give it a chance to display the error before exiting
     kill 0
     rm -Rf "$OUT_DIR/wrk"
     exit 1
