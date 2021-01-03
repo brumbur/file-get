@@ -28,7 +28,7 @@ function catchStdErr() {
 
     if [[ "$err" != '' ]]
     then
-        echo "$err" #todo return
+        echo "$err"
         return 1
     else
         return 0
@@ -74,7 +74,7 @@ function help {
         -p , --password   set the password. If omitted, the script will ask for it on the console
         -m , --marker     custom cut-off time marker
         -l , --logfile    log file
-        -L , --loglevel   specify log level from 0 to 4: (0) silent; (1) error; (3) warn; (2) info; (4) verbose
+        -L , --level   specify log level from 0 to 4: (0) silent; (1) error; (3) warn; (2) info; (4) verbose
         -R                when provided will delete the file from the source location
         -O                force overwrite when file with the same name already exists
                               (by default will overwrite only when the files have same size and modify dates)
@@ -91,7 +91,7 @@ parseArgs() {
     declare -n argsmap=$2
 
     local flags="kOhvqRb:s:d:u:p:m:l:L:"
-    local long="start,stop,help,source:,dest:,user:,password:,marker:logfile:,loglevel:"
+    local long="start,stop,help,source:,dest:,user:,password:,marker:logfile:,level:"
 
     parsed=$(getopt -a -n folder_sync -o "$flags" --long "$long" -- "${cmdargs[@]}")
     [[ $? -ne 0 ]] && usage
@@ -140,9 +140,9 @@ function stop {
 
 #Cleanup on kill
 function clean() {
-    echo -e "${r}Download failed!${s} ERROR is [$1]"
+    echo -F -e "${r}Download failed! ERROR is [$1]${s}"
     kill 0
-    rm -Rf "$OUT_directory/wrk"
+    rm -Rf "$OUT_DIR/wrk"
     exit 1
 }
 
@@ -182,11 +182,27 @@ function getPassword() {
     echo
 }
 
+# returns the last modified time for the file provided in the URL
+function getModDate() {
+    local dt=$(curl -s -I -u "$USER:$PWD" "$1" 2>&1 | awk '/Last-Modified:/ {sub("\r",""); print  $2,$3,$4,$5,$6,$7}')
+    echo "$(date -d "${dt}" '+%s')" # convert to ms
+}
+
+function getTimeMarker() {
+    local latest=$(find "$1" -type f -printf '%T@ %p\n' | sort -n | tail -1 | cut -d ' ' -f 1)
+
+    if [[ -z ${latest+_} ]]; then
+      echo "$(date '+%s')"
+    else
+      echo "$(date -d "@$latest" '+%s')"
+    fi
+}
+
 # get the file details and parse the size
 function getSize() {
     local size="$(curl -u "$USER:$PWD" -qIL "$1" 2> /dev/null | awk '/Length/ {print $2}'|grep -o '[0-9]*')"
     local size=${size:-1}
-    echo "$size" #todo return
+    echo "$size"
 }
 
 # takes an array reference and updates it with the file names in the given directory
@@ -194,51 +210,38 @@ function getDirectoryContent() {
     local -n arr=$1
     local url="$2"
 
-    #todo error checking & reporting
-    # shellcheck disable=SC2034
-    arr=("$(curl -s -u "$USER:$PWD" "$url/" | \
+    # todo error checking & reporting
+
+    # shellcheck disable=SC2207    #suppressed as globbing is fine in this case
+    arr=($(curl -s -u "$USER:$PWD" "$url/" | \
         sed -nr 's/(^-[ rw-].*)( *)([0-9])(.*)/\4/p' | \
-        sed -e 's/^ //g' | sed -e 's/ /\ /g')")
-}
+        sed -e 's/^ //g' | sed -e 's/ /\ /g'))
 
-# returns the last modified time for the file provided in the URL
-function getSourceLastModifiedDate() {
-    local dt=$(curl -s -I -u "$USER:$PWD" "$1" 2>&1 | awk '/Last-Modified:/ {sub("\r",""); print  $2,$3,$4,$5,$6,$7}')
-    echo "$(date -d "${dt}" '+%s')" # convert to ms #todo return
-}
-
-function getTimeMarker() {
-    local latest=$(find "$1" -type f -printf '%T@ %p\n' | sort -n | tail -1 | cut -d ' ' -f 1)
-
-    if [[ -z ${latest+_} ]]; then
-#      echo "$(date '+%s')"
-      printf "%s\n" "$(date '+%s')" > /dev/shm/fs #todo return
-    else
-#      echo "$(date -d "@$latest" '+%s')"
-      printf "%s\n" "$(date -d "@$latest" '+%s')" > /dev/shm/fs #todo return
-    fi
+    echo -D "Found ${#arr[@]} files in $url"
+    return 0
 }
 
 # filters out any files that are older than the cutoff time
 function getNewFiles() {
-    # shellcheck disable=SC2178
-    local -n arr=$1
+    local -n newer=$1
     local url=$2
     local cutoff=$3
     local lmd
 
-    # shellcheck disable=SC2068
-    for f in ${arr[@]}; do
-        lmd=$(getSourceLastModifiedDate "$url/$f")
+    # shellcheck disable=SC2068  # gobbling needs to be enabled for the loop
+    for f in ${newer[@]}; do
+        lmd=$(getModDate "$url/$f")
         [[ -n "$lmd" ]] || continue
         if [[ "$cutoff" -ge "$lmd" ]]; then
-            echo -I "\t(-) $f is old - skipped"
-            arr=("${arr[@]/$f}") # remove old file
+            echo -I -e "(-) $f is old - skipped"
+            newer=("${newer[@]/$f}") # remove old file
         else
-            echo -W "\t(+) $f is newer - downloading"
+            echo -W -e "(+) $f is newer - downloading"
         fi
     done
-    echo
+
+    echo -D "Found ${#newer[@]} files newer than $(date -d @"$cutoff")"
+    return 0 # needed to avoid interpreting the echo as an non-zero return code i.e. an error code
 }
 
 function showProgress() {
@@ -246,32 +249,43 @@ function showProgress() {
     local directory="$2"
     local file_name="$3"
     local chunks="$4"
-    local filesize="$5"
+    local total_size="$5"
     local time="$6"
     local err="$7"
 
     local kb=1024; local mb=1048576; local gb=1073741824; local units=$kb; local scale="Kb"
 
-    [[ $filesize -eq 0 ]] && return
-    [[ $filesize -ge $mb ]] && { units=$kb; scale="Kb"; }
-    [[ $filesize -ge $gb ]] && { units=$mb; scale="Mb"; }
-    [[ $filesize -gt $gb ]] && { units=$gb; scale="Gb"; }
+    [[ total_size -eq 0 ]] && return
+    [[ total_size -ge $mb ]] && { units=$kb; scale="Kb"; }
+    [[ total_size -ge $gb ]] && { units=$mb; scale="Mb"; }
+    [[ total_size -gt $gb ]] && { units=$gb; scale="Gb"; }
 
-    local completed=$(( $(eval ls -l "$directory/$file_name.{1..$chunks}" 2> /dev/null | \
+    local completed_size=$(( $(eval ls -l "$directory/$file_name.{1..$chunks}" 2> /dev/null | \
         awk 'BEGIN{s=0}{s+=$5}END{print s}') ))
     local elapsed=$(( $(date +%s) - time ))
-    local rate=$(( ( completed / elapsed )/units ))
-    local pct=$(( ( completed*100 ) / filesize ))
+    local rate=$(( ( completed_size / elapsed )/units ))
+    local pct=$(( ( completed_size*100 ) / total_size ))
 
     local status
     if [[ $pct -lt 100 ]]; then status="${y}Downloading${s}"; else status="${g}Completed${s}"; fi
     if [[ $action == 'Canceled' ]]; then status="${r}FAILED${s}"; fi
 
-    printf "%-15b" "$action"
-    printf "%-30s" "$file_name"
-    printf "%6s / %-6s @ %6s %3s/sec (%3s%%)" $((completed/units)) $((filesize/units)) $((rate)) $scale $pct
-    printf "%-25b" "......$status"
-    if [[ $action == 'Canceled' ]]; then printf "%40s\n" "[$err]"; fi
+#    # table format
+#    printf "%-15b" "$action"
+#    printf "%-30s" "$file_name"
+#    printf "%6s / %-6s @ %6s %3s/sec (%3s%%)" $((completed_size/units)) $((total_size/units)) $((rate)) $scale $pct
+#    printf "%-25b" "......$status"
+#    if [[ $action == 'Canceled' ]]; then printf "%40s\n" "[$err]"; fi
+
+    # line format
+    local msg
+    msg+=$(printf "%-15b" "$action")
+    msg+=$(printf "%-30s" "$file_name")
+    msg+=$(printf "%6s/%-6s%s @%6s %3s/sec (%3s%%)" $((completed_size/units)) $((total_size/units)) $scale $((rate)) $scale $pct)
+    msg+=$(printf "%-25b" "......$status")
+    if [[ $action == 'Canceled' ]]; then msg+=$(printf "%40s\n" "[$err]"); fi
+    echo -I -n "$msg"
+    return 0
 }
 
 function downloadFile() {
@@ -311,7 +325,7 @@ function downloadFile() {
         showProgress 'Canceled' "$wrk_dir" "$file_name" "$chunks" "$size" "$time" "$job_response"
         return 1
     fi
-    echo # print line separator to complete the progress line
+    echo -I # print line separator to complete the progress line
 
     # todo preserve modification date
     err_msg=$(catchStdErr moveFile "$file_name" "$wrk_dir" "$dest_dir")
@@ -325,13 +339,14 @@ function moveFile() {
     local source_dir="$2"
     local target_dir="$3"
 
-    #Join all the parts
-    eval cat "$source_dir/$file_name".{1..1} > "$source_dir/$file_name.completed"
-    rm -f "$source_dir/$file_name".{1..1}
+    #Join all the parts # todo preserve the modification times
+#    eval cat "$source_dir/$file_name".{1..1} > "$source_dir/$file_name.completed_size"
+#    rm -f "$source_dir/$file_name".{1..1}
+    mv "${source_dir}/${file_name}.1" "${source_dir}/${file_name}.completed_size" > /dev/null 2>&1
 
     # just move it if there is no name conflict
     if  [[ "$KEEP" = 'n' ]] || [[ ! -f "$target_dir/$file_name" ]]; then
-        err_msg=$(catchStdErr mv "${source_dir}/${file_name}.completed" "$target_dir/$file_name")
+        err_msg=$(catchStdErr mv "${source_dir}/${file_name}.completed_size" "$target_dir/$file_name")
         [[ $? != 0 ]] && { echo "$err_msg"; return 2; }
         return 0
     fi
@@ -340,17 +355,17 @@ function moveFile() {
     local overwrite=false
 
     # if option set to 'auto' check for matching name, size, mod date and overwrite
-    if (( $(stat -c%s "$source_dir/$file_name.completed") == $(stat -c%s "$target_dir/$file_name") )); then
-        local samesize=true
+    if (( $(stat -c%s "$source_dir/$file_name.completed_size") == $(stat -c%s "$target_dir/$file_name") )); then
+        local same_size=true
     fi
 
-    local new_file_date="$(date -d "$(stat "$source_dir/$file_name.completed" | awk '/Modify/ {print $2" "$3" "$4}')")"
+    local new_file_date="$(date -d "$(stat "$source_dir/$file_name.completed_size" | awk '/Modify/ {print $2" "$3" "$4}')")"
     local curr_file_date="$(date -d "$(stat "$target_dir/$file_name" | awk '/Modify/ {print $2" "$3" "$4}')")"
     if [[ "$new_file_date" = "$curr_file_date" ]] ; then
         local same_date=true
     fi
 
-    if [[ $samesize = "true" ]] && [[ $same_date = "true" ]]; then overwrite=true; fi
+    if [[ $same_size = "true" ]] && [[ $same_date = "true" ]]; then overwrite=true; fi
 
     local dest_name=$file_name
 
@@ -363,7 +378,7 @@ function moveFile() {
     fi
 
     # move to the final destination using the new file name
-    err_msg=$(catchStdErr mv "${source_dir}/${file_name}.completed" "$target_dir/$dest_name")
+    err_msg=$(catchStdErr mv "${source_dir}/${file_name}.completed_size" "$target_dir/$dest_name")
     [[ $? != 0 ]] && { echo "$err_msg"; return 2; }
 
     return 0
@@ -380,12 +395,15 @@ function checkAndDownload() {
     local out="$3"
     local -a files
 
-    echo -I "Checking location [$url] for files newer than [$(date -d @"$time")]"
     getDirectoryContent files "$url"
-    getNewFiles files "$url" "$time"
+    if [[ $? -ne 0 ]]; then clean "Failed to get directory content"; fi
 
-    # shellcheck disable=SC2068
+    getNewFiles files "$url" "$time"
+    if [[ $? -ne 0 ]]; then clean "Failed to identify newer files"; fi
+
+    echo -I "Checked location [$url] for files newer than [$(date -d @"$time")] and found ${#files[@]} new files"
     # todo support for parallel download
+    # shellcheck disable=SC2068  # gobbling needs to be enabled for the loop
     for f in ${files[@]}; do
         local size=$(getSize "$url/$f")
         downloadFile "$url" "$out" "$f" "$size"
@@ -402,19 +420,28 @@ function checkAndDownload() {
 # override bilt in echo to customize logging
 # if custom options are not present, normal echo behaviour will be preserved
 function echo() {
-    if [[ "$1" =~ ^(-[IDWE]) ]]; then log "$@"; else builtin echo "$@"; fi
+    if [[ "$1" =~ ^(-[IDWF]) ]]; then log "$@"; else builtin echo "$@"; fi
 }
 
 function log() {
+    (( LEVEL == 0 )) && return 0
+
     local severity="$1" && shift
 
-    (( $LEVEL >= 3 )) && stamp="$(date +"[%m-%d %H:%M:%S]")"
+    # only add timestamp at certain levels (needed?)
+    (( LEVEL >= 4 )) && stamp="$(date +"[%m-%d %H:%M:%S]")"
+
+    local echo_cmd="builtin echo $stamp "
+    [[ $1 =~ (^-[-neE]) ]] && echo_cmd="builtin echo ${BASH_REMATCH[1]} $stamp " && shift
+
+#    echo echo_cmd $severity $echo_cmd $*
+
     case $severity in
-        -D ) (( $LEVEL >= 4 )) && builtin echo -e $stamp "$@" ;; # print everything
-        -I ) (( $LEVEL >= 3 )) && builtin echo -e $stamp "$@";; # print info
-        -W ) (( $LEVEL >= 2 )) && builtin echo -e $stamp "$@" ;; # print warnings
-        -E ) (( $LEVEL >= 1 )) && builtin echo -e $stamp "${y}$@${s}" ;; # print errors
-        * )  (( $LEVEL >= 1 )) && builtin echo -e $stamp "$@" ;; # print errors by default
+        -D ) (( LEVEL >= 4 )) && $echo_cmd "$*" ;; # print everything
+        -I ) (( LEVEL >= 3 )) && $echo_cmd "$*";; # print info
+        -W ) (( LEVEL >= 2 )) && $echo_cmd "${y}$*${s}" ;; # print warnings
+        -F ) (( LEVEL >= 1 )) && $echo_cmd "${r}$*${s}" ;; # print errors
+        * )  (( LEVEL >= 1 )) && $echo_cmd "${r}$*${s}" ;; # print errors by default
     esac
 }
 
@@ -432,7 +459,7 @@ parseArgs CMD_ARGS ARGS_MAP
 
 # set log level
 LEVEL=${ARGS_MAP[LEVEL]:-2}
-LOG=${ARGS_MAP[LOG]:-"$OUT_directory/log.txt"}
+LOG=${ARGS_MAP[LOG]:-"$OUT_DIR/log.txt"}
 
 for K in "${!ARGS_MAP[@]}"; do echo -D "[$K] : [${ARGS_MAP[$K]}]"; done
 
@@ -485,10 +512,10 @@ if [[ ! -d "$OUT_DIR" ]]; then mkdir -p 755 "$OUT_DIR"; chmod 0755 "$OUT_DIR"; f
 [[ -d "$OUT_DIR" ]] || usage "-d | --dest"
 
 # use the provided time marker, latest timestamp in the destination directory or current time (in this order)
-#CUT_OFF_TIME=${ARGS_MAP[MARKER]:-$(getTimeMarker "$OUT_DIR")}
-getTimeMarker "$OUT_DIR"
-read -r tm < /dev/shm/fs
-CUT_OFF_TIME=${ARGS_MAP[MARKER]:-$tm}
+CUT_OFF_TIME=${ARGS_MAP[MARKER]:-$(getTimeMarker "$OUT_DIR")}
+#getTimeMarker "$OUT_DIR"
+#read -r tm < /dev/shm/fs
+#CUT_OFF_TIME=${ARGS_MAP[MARKER]:-$tm}
 
 # verify password
 PWD="${ARGS_MAP[PWD]}"
@@ -510,29 +537,26 @@ read -r -d '' LOGO <<- EOM
     ${g}                          ${y}    /___/           ${s}
 EOM
 
-echo -E "$LOGO"
+echo -I -e "$LOGO"
 
-# shellcheck disable=SC2031
-# shellcheck disable=SC2030
 if [[ "$SERVICE" -eq 1 ]]
 then
     echo -I -e "${g}Folder-sync started as background process; use '--stop' option to terminate it.${s}"
     { (
+        TIME_MARKER="$CUT_OFF_TIME"
         while /bin/true; do
-        checkAndDownload "$URL" "$CUT_OFF_TIME" "$OUT_directory"
+        checkAndDownload "$URL" "$TIME_MARKER" "$OUT_DIR"
         sleep "$SLEEP"
-
-        CUT_OFF_TIME=$(getTimeMarker "$OUT_directory") #update time marker
-#    done >>"$LOG" 2>&1 &
+        TIME_MARKER=$(getTimeMarker "$OUT_DIR") #update time marker
     done &); } 2>&1
 else
     echo -I -e "${g}Folder-sync running...${s}"
-    checkAndDownload "$URL" "$CUT_OFF_TIME" "$OUT_directory"
+    checkAndDownload "$URL" "$CUT_OFF_TIME" "$OUT_DIR"
     if [[ $ERR_FLAG -eq 0 ]]
     then
-        echo -I -e "${g}Folder-sync completed${s}"
+        echo -I -e "${g}Folder-sync completed_size${s}"
     else
-        echo -I -e "${y}Folder-sync completed with errors${s}"
+        echo -I -e "${y}Folder-sync completed_size with errors${s}"
     fi
-    rm -Rf "$OUT_directory/.wrk"
+    rm -Rf "$OUT_DIR/.wrk"
 fi
