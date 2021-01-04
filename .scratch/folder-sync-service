@@ -1,7 +1,0 @@
-#!/bin/bash
-
-DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
-"$DIR"/folder-sync "$@" > "$DIR"/log.txt &
-job_pid=$!
-echo "Started $DIR/folder-sync with PID $job_pid."
-echo "Job log stored at $DIR/log.txt"
