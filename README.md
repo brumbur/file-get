@@ -1,5 +1,3 @@
-#_<span style="color:green">*Folder*</span><span style="color:yellow">*Sync*</span>_
-
 <pre>
      ____     __   __        ____
     / __/__  / /__/ /__ ____/ __/_ _____  ____
