@@ -17,10 +17,10 @@ The result is a small utility that can monitor a remote FTP directory and downlo
 - FTP using curl
 - Job controls and IPC to track progress and errors
 - Bash function override to customize built-in commands
-- Passing arrays as function arguments and function result
+- Passing arrays as function arguments and returning array as function result
 - Redirecting standard output to catch errors and subshell output
-- Convenient and flexible arguments parsing with getopt and associative arrays
-- Fun with ASCII art, prompt control, and console colors and formatting
+- Convenient and flexible CLI argument parsing with getopt and associative arrays
+- Fun with ASCII art, prompt control, console colors and formatting
 
 ## Interesting parts, explanation, and resources:
 TBD
