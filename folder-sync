@@ -16,11 +16,11 @@
 # functions
 ###########################
 
-#function catchStdErr2() {
-#    local -n v="$1";
-#    shift && { v="$("$@" 2>&1 1>&3 3>&-)"; } 3>&1;
-#    echo "$v"
-#}
+function catchStdErr2() {
+    local -n v="$1";
+    shift && { v="$("$@" 2>&1 1>&3 3>&-)"; } 3>&1;
+    echo "$v"
+}
 
 function catchStdErr() {
     local err=''
@@ -72,6 +72,7 @@ function help {
 
     Optional:
         -p , --password   set the password. If omitted, the script will ask for it on the console
+        -f , --file       specific file to download, wildcard (*) pattern accepted
         -m , --marker     custom cut-off time marker
         -l , --logfile    log file
         -L , --level   specify log level from 0 to 4: (0) silent; (1) error; (3) warn; (2) info; (4) verbose
@@ -90,8 +91,8 @@ parseArgs() {
     declare -n cmdargs=$1
     declare -n argsmap=$2
 
-    local flags="kOhvqRb:s:d:u:p:m:l:L:"
-    local long="start,stop,help,source:,dest:,user:,password:,marker:logfile:,level:"
+    local flags="kOhvqRb:s:d:u:p:m:l:L:f:"
+    local long="start,stop,help,source:,dest:,user:,password:,marker:logfile:,level:,file:"
 
     parsed=$(getopt -a -n folder_sync -o "$flags" --long "$long" -- "${cmdargs[@]}")
     [[ $? -ne 0 ]] && usage
@@ -112,6 +113,7 @@ parseArgs() {
         # options
         -h | --help) help ;;
         -s | --source)   argsmap[URL]=$2     ; shift 2 ;;
+        -f | --file  )   argsmap[FILE]=$2     ; shift 2 ;;
         -d | --dest)     argsmap[OUT_DIR]=$2 ; shift 2 ;;
         -u | --user)     argsmap[USER]=$2    ; shift 2 ;;
         -p | --password) argsmap[PWD]=$2     ; shift 2 ;;
@@ -140,25 +142,25 @@ function stop {
 
 #Cleanup on kill
 function clean() {
-    builtin echo -e "${r}Download failed! $1${s}"
+    echo -F -e "Download failed! $1"
     sleep 1 # give it a chance to display the error before exiting
     kill 0
     rm -Rf "$OUT_DIR/wrk"
     exit 1
 }
 
-#function runJob() {
-#    local job_pid=$1
-#    ({
-#        local err
-#        shift && { err="$("$@" 2>&1 1>&3 3>&-)"; } 3>&1;
-#        echo "$err"
-#        [[ "$err" != '' ]] && { echo "$err"; return 1; }
-#    }  ) &
-#
-#    eval "$job_pid"="$!"
-#    return
-#}
+function runJob() {
+    local job_pid=$1
+    ({
+        local err
+        shift && { err="$("$@" 2>&1 1>&3 3>&-)"; } 3>&1;
+        echo "$err"
+        [[ "$err" != '' ]] && { echo "$err"; return 1; }
+    }  ) &
+
+    eval "$job_pid"="$!"
+    return
+}
 
 function getPassword() {
     local pwd="$1"
@@ -211,38 +213,62 @@ function getDirectoryContent() {
     local -n arr=$1
     local url="$2"
 
-    # todo error checking & reporting
+    local curl_out
+    curl_out=$(curl -sS -u "$USER:$PWD" "$url/" 2>&1)
+    curl_err=$?
 
-    # shellcheck disable=SC2207    #suppressed as globbing is fine in this case
-    arr=($(curl -s -u "$USER:$PWD" "$url/" | \
-        sed -nr 's/(^-[ rw-].*)( *)([0-9])(.*)/\4/p' | \
-        sed -e 's/^ //g' | sed -e 's/ /\ /g'))
+    if [[ $curl_out =~ (^curl.*) ]]; then
+        echo -F -e "Failed to retrieve directory content. Error message: ${BASH_REMATCH[1]}"
+        return $curl_err
+    fi
 
-    echo -D "Found ${#arr[@]} files in $url"
+    # shellcheck disable=SC2034
+    mapfile -t arr < <(echo "$curl_out" | \
+        sed -nr 's/(^-[ rw-].*)( *)([0-9])(.*)/\4/p' | sed -e 's/^ //g' | sed -e 's/ /\ /g' )
+
     return 0
 }
 
 # filters out any files that are older than the cutoff time
-function getNewFiles() {
+function applyTimeFilter() {
     local -n newer=$1
     local url=$2
     local cutoff=$3
-    local lmd
 
+    local lmd
     # shellcheck disable=SC2068  # gobbling needs to be enabled for the loop
     for f in ${newer[@]}; do
         lmd=$(getModDate "$url/$f")
-        [[ -n "$lmd" ]] || continue
+        if [[ -z "$lmd" ]]; then
+            echo -W -e "Could not determine the last modification date for $f. Will not download!"
+            continue
+        fi
+
         if [[ "$cutoff" -ge "$lmd" ]]; then
-            echo -I -e "(-) $f is old - skipped"
+            echo -D -e "(-) $f is old - skipped"
             newer=("${newer[@]/$f}") # remove old file
         else
-            echo -W -e "(+) $f is newer - downloading"
+            echo -D -e "(+) $f is newer - downloading"
         fi
     done
 
-    echo -D "Found ${#newer[@]} files newer than $(date -d @"$cutoff")"
-    return 0 # needed to avoid interpreting the echo as an non-zero return code i.e. an error code
+    echo -D "Found ${#newer[@]} files newer than [$(date -d @"$cutoff")]"
+    return 0
+}
+
+function applyNameFilter(){
+    local -n matched=$1
+    local pattern=$2
+
+    # shellcheck disable=SC2068  # gobbling needs to be enabled for the loop
+    for f in ${matched[@]}; do
+        if [[ $f =~ $pattern ]]; then
+            echo -D -e "(+) $f matches - downloading"
+        else
+            echo -D -e "(-) $f does not match - skipped"
+            matched=("${matched[@]/$f}") # remove old file
+        fi
+    done
 }
 
 function showProgress() {
@@ -271,22 +297,17 @@ function showProgress() {
     if [[ $pct -lt 100 ]]; then status="${y}Downloading${s}"; else status="${g}Completed${s}"; fi
     if [[ $action == 'Canceled' ]]; then status="${r}FAILED${s}"; fi
 
-#    # table format
-#    printf "%-15b" "$action"
-#    printf "%-30s" "$file_name"
-#    printf "%6s / %-6s @ %6s %3s/sec (%3s%%)" $((completed_size/units)) $((total_size/units)) $((rate)) $scale $pct
-#    printf "%-25b" "......$status"
-#    if [[ $action == 'Canceled' ]]; then printf "%40s\n" "[$err]"; fi
-
-    # line format
     local msg
     msg+=$(printf "%-15b" "$action")
     msg+=$(printf "%-30s" "$file_name")
     msg+=$(printf "%6s/%-6s%s @%6s %3s/sec (%3s%%)" $((completed_size/units)) $((total_size/units)) $scale $((rate)) $scale $pct)
     msg+=$(printf "%-25b" "......$status")
-    if [[ $action == 'Canceled' ]]; then msg+=$(printf "%40s\n" "[$err]"); fi
+    if [[ $action == 'Canceled' ]]; then msg+=$(printf "%40s" "[$err]"); fi
     echo -I -n "$msg"
-    return 0
+
+    # end status line when download has completed
+    [[ $action == 'Processed' ]] && echo -I
+    [[ $action == 'Canceled' ]] && echo -I
 }
 
 function downloadFile() {
@@ -303,9 +324,9 @@ function downloadFile() {
         exit;
     }
 
-#     [[ $file_name == 'BCDriverMerge.exe' ]] && file_name='*BCDriverMerge.exe' # just for testing
-    # curl --write-out "%{http_code}\n" -sS -R --ftp-pasv -u "$USER:$PWD" -o "${wrk_dir}/${file_name}.1" "$src_dir/$file_name" >/dev/shm/fs 2>&1 &
-    curl -sS -R --ftp-pasv -u "$USER:$PWD" -o "${wrk_dir}/${file_name}.1" "$src_dir/$file_name" >/dev/shm/fs 2>&1 &
+     [[ $file_name == 'BCDriverMerge.exe' ]] && file_name='*BCDriverMerge.exe' # just for testing
+    curl --write-out "%{http_code}" -sS -R --ftp-pasv \
+        -u "$USER:$PWD" -o "${wrk_dir}/${file_name}.1" "$src_dir/$file_name" >/dev/shm/fs 2>&1 &
 
     # Wait for the job to complete while showing progress
     time=$(( $(date +%s)-1 ))
@@ -326,12 +347,10 @@ function downloadFile() {
         showProgress 'Canceled' "$wrk_dir" "$file_name" "$chunks" "$size" "$time" "$job_response"
         return 1
     fi
-    echo -I # print line separator to complete the progress line
 
-    # todo preserve modification date
+
     err_msg=$(catchStdErr moveFile "$file_name" "$wrk_dir" "$dest_dir")
-#    [[ $? != 0 ]] && { echo "$err_msg"; return 2; }
-
+    [[ $? != 0 ]] && { echo "$err_msg"; return 1; }
     return 0
 }
 
@@ -341,13 +360,13 @@ function moveFile() {
     local target_dir="$3"
 
     #Join all the parts # todo preserve the modification times
-#    eval cat "$source_dir/$file_name".{1..1} > "$source_dir/$file_name.completed_size"
+#    eval cat "$source_dir/$file_name".{1..1} > "$source_dir/$file_name.completed"
 #    rm -f "$source_dir/$file_name".{1..1}
-    mv "${source_dir}/${file_name}.1" "${source_dir}/${file_name}.completed_size" > /dev/null 2>&1
+    mv "${source_dir}/${file_name}.1" "${source_dir}/${file_name}.completed" > /dev/null 2>&1
 
     # just move it if there is no name conflict
     if  [[ "$KEEP" = 'n' ]] || [[ ! -f "$target_dir/$file_name" ]]; then
-        err_msg=$(catchStdErr mv "${source_dir}/${file_name}.completed_size" "$target_dir/$file_name")
+        err_msg=$(catchStdErr mv "${source_dir}/${file_name}.completed" "$target_dir/$file_name")
         [[ $? != 0 ]] && { echo "$err_msg"; return 2; }
         return 0
     fi
@@ -356,11 +375,11 @@ function moveFile() {
     local overwrite=false
 
     # if option set to 'auto' check for matching name, size, mod date and overwrite
-    if (( $(stat -c%s "$source_dir/$file_name.completed_size") == $(stat -c%s "$target_dir/$file_name") )); then
+    if (( $(stat -c%s "$source_dir/$file_name.completed") == $(stat -c%s "$target_dir/$file_name") )); then
         local same_size=true
     fi
 
-    local new_file_date="$(date -d "$(stat "$source_dir/$file_name.completed_size" | awk '/Modify/ {print $2" "$3" "$4}')")"
+    local new_file_date="$(date -d "$(stat "$source_dir/$file_name.completed" | awk '/Modify/ {print $2" "$3" "$4}')")"
     local curr_file_date="$(date -d "$(stat "$target_dir/$file_name" | awk '/Modify/ {print $2" "$3" "$4}')")"
     if [[ "$new_file_date" = "$curr_file_date" ]] ; then
         local same_date=true
@@ -379,7 +398,7 @@ function moveFile() {
     fi
 
     # move to the final destination using the new file name
-    err_msg=$(catchStdErr mv "${source_dir}/${file_name}.completed_size" "$target_dir/$dest_name")
+    err_msg=$(catchStdErr mv "${source_dir}/${file_name}.completed" "$target_dir/$dest_name")
     [[ $? != 0 ]] && { echo "$err_msg"; return 2; }
 
     return 0
@@ -399,12 +418,18 @@ function checkAndDownload() {
     getDirectoryContent files "$url"
     if [[ $? -ne 0 ]]; then clean "Failed to get directory content"; fi
 
-    getNewFiles files "$url" "$time"
+    applyTimeFilter files "$url" "$time"
     if [[ $? -ne 0 ]]; then clean "Failed to identify newer files"; fi
 
-    echo -I "Checked location [$url] for files newer than [$(date -d @"$time")] and found ${#files[@]} new files"
+    applyNameFilter files "${ARGS_MAP[FILE]:-.*}"
+
+    [[ -n "${files[*]}" ]] && echo -W -e "No new files" && return 0
+    echo -I -e "Checking [$url] for files newer than [${y}$(date -d @"$time")${s}] - downloading the following files:"
+    # shellcheck disable=SC2068  # gobbling needed here
+    for f in ${files[@]}; do echo -I "$f"; done
     # todo support for parallel download
-    # shellcheck disable=SC2068  # gobbling needs to be enabled for the loop
+
+    # shellcheck disable=SC2068
     for f in ${files[@]}; do
         local size=$(getSize "$url/$f")
         downloadFile "$url" "$out" "$f" "$size"
@@ -413,13 +438,12 @@ function checkAndDownload() {
             echo -E -e "${y}Error reported when downloading file $f${s}"
         elif  [[ "$DELETE_REMOTE_FILE" = "y" ]]; then
             err_msg=$(removeRemoteFile "$USER:$PWD" "$url" "$f")
-            [[ $? != 0 ]] && { (( ERR_FLAG++)); echo -E -e "Error reported for file $f [$err_msg]"; }
+            [[ $? != 0 ]] && { (( ERR_FLAG++)); echo -E -e "Error reported when removing remote file $f [$err_msg]"; }
         fi
     done
 }
 
 # override bilt in echo to customize logging
-# if custom options are not present, normal echo behaviour will be preserved
 function echo() {
     if [[ "$1" =~ ^(-[IDWF]) ]]; then log "$@"; else builtin echo "$@"; fi
 }
@@ -434,8 +458,6 @@ function log() {
 
     local echo_cmd="builtin echo $stamp "
     [[ $1 =~ (^-[-neE]) ]] && echo_cmd="builtin echo ${BASH_REMATCH[1]} $stamp " && shift
-
-#    echo echo_cmd $severity $echo_cmd $*
 
     case $severity in
         -D ) (( LEVEL >= 4 )) && $echo_cmd "$*" ;; # print everything
@@ -453,6 +475,7 @@ function main {
 ###########################
 # parse args
 ###########################
+
 # shellcheck disable=SC2034
 CMD_ARGS=("$@")
 declare -A ARGS_MAP
@@ -509,16 +532,13 @@ CMD=${ARGS_MAP[CMD]:-"START"}
 
 # validate destination
 OUT_DIR=${ARGS_MAP[OUT_DIR]}
-if [[ ! -d "$OUT_DIR" ]]; then mkdir -p 755 "$OUT_DIR"; chmod 0755 "$OUT_DIR"; fi
+if [[ ! -d "$OUT_DIR" ]]; then mkdir -p "$OUT_DIR"; chmod 0755 "$OUT_DIR"; fi
 [[ -d "$OUT_DIR" ]] || usage "-d | --dest"
 
 # use the provided time marker, latest timestamp in the destination directory or current time (in this order)
 CUT_OFF_TIME=${ARGS_MAP[MARKER]:-$(getTimeMarker "$OUT_DIR")}
-#getTimeMarker "$OUT_DIR"
-#read -r tm < /dev/shm/fs
-#CUT_OFF_TIME=${ARGS_MAP[MARKER]:-$tm}
 
-# verify password
+# set password
 PWD="${ARGS_MAP[PWD]}"
 [[ -n "$PWD" ]] || getPassword PWD
 
@@ -530,7 +550,7 @@ SLEEP=${ARGS_MAP[SLEEP]:-60}
 r='\033[1;31m' ; g='\033[1;32m'; y='\033[1;33m'; s='\033[0;37m'
 
 read -r -d '' LOGO <<- EOM
-    \n
+\n
     ${g}   ____     __   __       ${y}   ____             ${s}
     ${g}  / __/__  / /__/ /__ ____${y}  / __/_ _____  ____${s}
     ${g} / _// _ \/ / _  / -_) __/${y}  \ \/ // / _ \/ __/${s}
@@ -542,7 +562,7 @@ echo -I -e "$LOGO"
 
 if [[ "$SERVICE" -eq 1 ]]
 then
-    echo -I -e "${g}Folder-sync started as background process; use '--stop' option to terminate it.${s}"
+    echo -I -e "${g}Folder-sync started as background process; use '--stop' to terminate it.${s}"
     { (
         TIME_MARKER="$CUT_OFF_TIME"
         while /bin/true; do
@@ -555,9 +575,9 @@ else
     checkAndDownload "$URL" "$CUT_OFF_TIME" "$OUT_DIR"
     if [[ $ERR_FLAG -eq 0 ]]
     then
-        echo -I -e "${g}Folder-sync completed_size${s}"
+        echo -I -e "${g}Folder-sync completed${s}"
     else
-        echo -I -e "${y}Folder-sync completed_size with errors${s}"
+        echo -I -e "${y}Folder-sync completed with errors${s}"
     fi
     rm -Rf "$OUT_DIR/.wrk"
 fi

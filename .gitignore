@@ -2,6 +2,8 @@ target/
 
 ### IntelliJ IDEA ###
 .idea
+.scratch
 *.iws
 *.iml
 *.ipr
+*.log
