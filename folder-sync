@@ -50,9 +50,9 @@ function help {
    echo -e "${s}
 
     Description:
-        Connect to an FTP directory and downloads all new files as per the provided options.
+        Get directory listing from an FTP server and download all new files as per the provided options.
 
-        Note that there are three ways for identifying \"new\" files:
+        Note -- there are three options for identifying \"new\" files:
             1. Any file newer that the last file downloaded in the destination directory
             2. Any file newer than the script start time if there are no files in the destination directory
             3. Any file newer than the time marker provided with the -m option e.g. -m \"yesterday\"
@@ -76,7 +76,7 @@ function help {
         -m , --marker     custom cut-off time marker
         -l , --logfile    log file
         -L , --level      specify log level from 0 to 4: (0) silent; (1) error; (3) warn; (2) info; (4) verbose
-        -R                when provided will delete the file from the source location
+        -R                after download completes, delete the file from the source location
         -O                force overwrite when file with the same name already exists
                               (by default will overwrite only when the files have same size and date)
         -k                never overwrite when file with the same name already exists
@@ -189,29 +189,39 @@ function read_password() {
 
 # override built-in echo to customize logging
 function echo() {
-    if [[ "$1" =~ ^(-[IDWF]) ]]; then log "$@"; else builtin echo "$@" | tee -a "$LOG_FILE_NAME" 2>&1 ; fi
+    if [[ "$1" =~ ^(-[IDWF]) ]]; then log "$@"; else builtin echo "$@"; fi #| tee -a "$LOG_FILE_NAME" 2>&1 ; fi
 }
 
 function log() {
+    local echo_cmd="builtin echo"
+    local severity="$1" && shift
+
     (( LEVEL == 0 )) && return 0
 
-    local severity="$1" && shift
+#    [[ $1 =~ (^-[-neE]) ]] && echo_cmd="builtin echo ${BASH_REMATCH[1]} $stamp " && shift
+    while :
+    do
+        if [[ $1 =~ (^-[-neE]) ]]; then
+            echo_cmd=" $echo_cmd ${BASH_REMATCH[1]}" && shift
+        else
+            break;
+        fi
+    done
 
     # only add timestamp at certain levels (needed?)
     (( LEVEL >= 4 )) && stamp="$(date +"[%m-%d %H:%M:%S]")"
-
-    local echo_cmd="builtin echo $stamp "
-    [[ $1 =~ (^-[-neE]) ]] && echo_cmd="builtin echo ${BASH_REMATCH[1]} $stamp " && shift
-
-    printf "%s\n" "$*">> "$LOG_FILE_NAME" 2>&1
+    echo_cmd="$echo_cmd $stamp"
 
     case $severity in
-        -D ) (( LEVEL >= 4 )) && $echo_cmd "$*" ;; # print everything
-        -I ) (( LEVEL >= 3 )) && $echo_cmd "$*" ;; # print info
-        -W ) (( LEVEL >= 2 )) && $echo_cmd "$*" ;; # print warnings
-        -F ) (( LEVEL >= 1 )) && $echo_cmd "$*" ;; # print errors
-        *  ) (( LEVEL >= 1 )) && $echo_cmd "$*" ;; # print errors by default
+        -D ) (( LEVEL >= 4 )) && $echo_cmd " $*" ;; # print everything
+        -I ) (( LEVEL >= 3 )) && $echo_cmd " $*" ;; # print info
+        -W ) (( LEVEL >= 2 )) && $echo_cmd " $*" ;; # print warnings
+        -F ) (( LEVEL >= 1 )) && $echo_cmd " $*" ;; # print errors
+        *  ) (( LEVEL >= 1 )) && $echo_cmd " $*" ;; # print errors by default
     esac
+
+    #log to file everything but without any escape characters
+    printf "%s\n" "$*" | sed 's/[\x01-\x1F\x7F]//g' >> "$LOG_FILE_NAME" 2>&1
 }
 
 function track_progress() {
@@ -556,12 +566,12 @@ then
     echo -e "${g}Folder-sync started in background; use '--stop' to terminate${s}" | tee -a "$LOG_FILE_NAME" 2>&1
 else
     echo -I -e "${g}Folder-sync running...${s}"
-    dir_scan "$URL" "$CUT_OFF_TIME" "$OUT_DIR" | tee -a "$LOG_FILE_NAME" 2>&1
+    dir_scan "$URL" "$CUT_OFF_TIME" "$OUT_DIR" #| tee -a "$LOG_FILE_NAME" 2>&1
     if [[ $ERR_FLAG -eq 0 ]]
     then
-        echo -I -e "${g}Folder-sync completed${s}" | tee -a "$LOG_FILE_NAME" 2>&1
+        echo -I -e "${g}Folder-sync completed${s}" #| tee -a "$LOG_FILE_NAME" 2>&1
     else
-        echo -W -e "${y}Folder-sync completed with errors${s}" | tee -a "$LOG_FILE_NAME" 2>&1
+        echo -W -e "${y}Folder-sync completed with errors${s}" #| tee -a "$LOG_FILE_NAME" 2>&1
     fi
     rm -Rf "$OUT_DIR/.wrk" | tee -a "$LOG_FILE_NAME" 2>&1
 fi
