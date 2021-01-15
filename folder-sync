@@ -1,4 +1,5 @@
-#!/bin/bash
+#!/usr/bin/bash
+# use bash explicitly to avoid issues arround printf, declare -n, etc
 (set -o igncr) 2>/dev/null && set -o igncr; # cygwin specific shell options
 
 #     ____     __   __        ____
@@ -224,45 +225,6 @@ function log() {
     printf "%s\n" "$*" | sed 's/[\x01-\x1F\x7F]//g' >> "$LOG_FILE_NAME" 2>&1
 }
 
-function track_progress() {
-    local action="$1"
-    local directory="$2"
-    local file_name="$3"
-    local chunks="$4"
-    local total_size="$5"
-    local time="$6"
-    local err="$7"
-
-    local kb=1024; local mb=1048576; local gb=1073741824; local units=$kb; local scale="Kb"
-
-    [[ total_size -eq 0 ]] && return
-    [[ total_size -ge $mb ]] && { units=$kb; scale="Kb"; }
-    [[ total_size -ge $gb ]] && { units=$mb; scale="Mb"; }
-    [[ total_size -gt $gb ]] && { units=$gb; scale="Gb"; }
-
-    local completed_size=$(( $(eval ls -l "$directory/$file_name.{1..$chunks}" 2> /dev/null | \
-        awk 'BEGIN{s=0}{s+=$5}END{print s}') ))
-    local elapsed=$(( $(date +%s) - time ))
-    local rate=$(( ( completed_size / elapsed )/units ))
-    local pct=$(( ( completed_size*100 ) / total_size ))
-
-    local status
-    if [[ $pct -lt 100 ]]; then status="${y}Downloading${s}"; else status="${g}Completed${s}"; fi
-    if [[ $action == 'Canceled' ]]; then status="${r}FAILED${s}"; fi
-
-    local msg
-    msg+=$(printf "%-15b" "$action")
-    msg+=$(printf "%-30s" "$file_name")
-    msg+=$(printf "%6s/%-6s%s @%6s %3s/sec (%3s%%)" $((completed_size/units)) $((total_size/units)) $scale $((rate)) $scale $pct)
-    msg+=$(printf "%-25b" "......$status")
-    if [[ $action == 'Canceled' ]]; then msg+=$(printf "%40s" "[$err]"); fi
-    echo -I -n "$msg"
-
-    # end status line when download has completed
-    [[ $action == 'Processed' ]] && echo -I
-    [[ $action == 'Canceled' ]] && echo -I
-}
-
 # returns the last modified time for the file provided in the URL
 function get_mtime() {
     local mtime
@@ -335,6 +297,8 @@ function file_move() {
     local source_dir="$2"
     local target_dir="$3"
 
+    [[ ! -f "$source_dir/$file_name.1" ]] && return 1
+
     #Join all the parts # todo preserve the modification times
 #    eval cat "$source_dir/$file_name".{1..1} > "$source_dir/$file_name.completed"
 #    rm -f "$source_dir/$file_name".{1..1}
@@ -390,21 +354,36 @@ function file_download() {
     local dest_dir="$2"
     local file_name="$3"
     local size="$4"
-    local chunks=1 # only needed when downloading in multiple parts
 
+    local chunks=1 # only needed when downloading in multiple parts
     local wrk_dir="$dest_dir/.wrk"
+
     mkdir -p "$wrk_dir"; chmod 755 "$wrk_dir"
     [[ -d "$wrk_dir" ]] || {
         echo -e "ERROR: Cannot create working directory [$wrk_dir]. Please check permissions";
         exit;
     }
 
-     [[ $file_name == 'BCDriverMerge.exe' ]] && file_name='*BCDriverMerge.exe' # just for testing
+    local origname=$file_name
+    [[ $file_name == 'BCDriverMerge.exe' ]] && file_name='*BCDriverMerge.exe' # just for testing
+    [[ $file_name == 'BCWim.bin' ]] && file_name='*BCWim.bin' # just for testing
+    ( {
+    sleep 5;
     curl --write-out "%{http_code}" -sS -R --ftp-pasv \
-        -u "$USER:$PWD" -o "${wrk_dir}/${file_name}.1" "$src_dir/$file_name" >/dev/shm/fs 2>&1 &
+        -u "$USER:$PWD" -o "${wrk_dir}/${file_name}.1" "$src_dir/$file_name" >/dev/shm/$origname  2>&1; } ) &
+
+#    wait_for_completion "Processing" "$wrk_dir" "$file_name" $chunks "$size"
+}
+
+function wait_for_completion() {
+    local action="$1" #
+    local directory="$2"
+    local file_name="$3"
+    local chunks="$4"
+    local total_size="$5"
 
     # Wait for the job to complete while showing progress
-    time=$(( $(date +%s)-1 ))
+    local time=$(( $(date +%s)-1 ))
     while jobs | grep -q Running ;
     do
         sleep 1
@@ -423,10 +402,8 @@ function file_download() {
         return 1
     fi
 
-
-    err_msg=$(catch_stderr file_move "$file_name" "$wrk_dir" "$dest_dir")
-    [[ $? != 0 ]] && { echo "$err_msg"; return 1; }
-    return 0
+#    err_msg=$(catch_stderr file_move "$file_name" "$wrk_dir" "$dest_dir")
+#    [[ $? != 0 ]] && { echo "$err_msg"; return 1; }
 }
 
 # takes an array reference and updates it with the file names in the given directory
@@ -455,7 +432,7 @@ function dir_scan() {
     local time="$2"
     local out="$3"
     local -a files
-
+    declare -A sz_map
     echo -I -e "Checking [$url] for files newer than [${y}$(date -d @"$time")${s}]"
 
     dir_get_content files "$url"
@@ -467,6 +444,7 @@ function dir_scan() {
     filter_filename files "${ARGS_MAP[FILE]:-.*}"
 
     [[ -n "${files[*]}" ]] || { echo -W -e "No new files"; eturn 0; }
+
     echo -D -e "Downloading the following files:"
     # shellcheck disable=SC2068  # gobbling needed here
     for f in ${files[@]}; do echo -D "$f"; done
@@ -475,15 +453,130 @@ function dir_scan() {
     # shellcheck disable=SC2068
     for f in ${files[@]}; do
         local size=$(file_get_size "$url/$f")
+        sz_map[$f]=$size
         file_download "$url" "$out" "$f" "$size"
-        if [[ $? -ne 0 ]]; then
-            (( ERR_FLAG++))
-            #echo -E -e "${y}Error reported when downloading file $f${s}"
-        elif  [[ "$DELETE_REMOTE_FILE" = "y" ]]; then
-            err_msg=$(file_remove "$USER:$PWD" "$url" "$f")
-            [[ $? != 0 ]] && { (( ERR_FLAG++)); echo -E -e "Error reported when removing remote file $f [$err_msg]"; }
+
+#    err_msg=$(catch_stderr file_move "$file_name" "$wrk_dir" "$dest_dir")
+#    [[ $? != 0 ]] && { echo "$err_msg"; return 1; }
+
+#        if [[ $? -ne 0 ]]; then
+#            (( ERR_FLAG++))
+#            #echo -E -e "${y}Error reported when downloading file $f${s}"
+#        elif  [[ "$DELETE_REMOTE_FILE" = "y" ]]; then
+#            err_msg=$(file_remove "$USER:$PWD" "$url" "$f")
+#            [[ $? != 0 ]] && { (( ERR_FLAG++)); echo -E -e "Error reported when removing remote file $f [$err_msg]"; }
+#        fi
+    done
+
+    # Wait for the job to complete while showing progress
+    local files_num=${#files[@]}
+    local time=$(( $(date +%s)-1 ))
+    while jobs | grep -q Running ;
+    do
+        sleep 1
+        for K in "${!sz_map[@]}"; do
+            fn=$K
+            fs=${sz_map[$K]}
+            track_progress "Processing" "$out/.wrk" "$fn" "1" "$fs" "$time"
+            tput el
+            echo
+        done
+        tput ech ${#fs} # erase the last reported size value
+        tput cub 1000 # move 1000 chars left
+        echo -en "\033[${files_num}A" # move the cursor up N lines: \033[<N>A
+    done
+
+    for K in "${!sz_map[@]}"; do
+        fn=$K
+        fs=${sz_map[$K]}
+        read -r job_response < /dev/shm/$fn # get the job actual output
+
+        if [[ "$job_response" == '' ]] || [[ "$job_response" =~ '226' ]]; then
+            track_progress 'Processed' "$out/.wrk" "$fn" "1" "$fs" "$time"
+            file_move "$fn" "$out/.wrk" "$out"
+        else
+            track_progress 'Canceled' "$out/.wrk" "$fn" "1" "$fs" "$time" "$job_response"
         fi
     done
+}
+
+function wait_for_all() {
+    local action="$1" #
+    local directory="$2"
+    local file_name="$3"
+    local chunks="$4"
+    local total_size="$5"
+    local -a all_files=$6
+    declare -A sz_map
+
+    for f in ${all_files[@]}; do
+        sz_map[f]=$(wc -c "$directory/$f" | cut -d ' ' -f 1)
+    done
+
+for K in "${!all_files[@]}"; do echo -D "[$K] : [${all_files[$K]}]"; done
+#    # Wait for the job to complete while showing progress
+#    local time=$(( $(date +%s)-1 ))
+#    while jobs | grep -q Running ;
+#    do
+#        sleep 1
+#        track_progress "Processing" "$wrk_dir" "$file_name" "$chunks" "$size" "$time"
+#        tput ech ${#size} # erase the last reported size value
+#        tput cub 1000 # move 1000 chars left
+#    done
+#
+#    read -r job_response < /dev/shm/fs # get the job actual output
+#    job_err=$(jobs | awk '/Exit/ {print $3}') # or another way to get just the exit code
+#
+#    if [[ "$job_err" == '' ]]; then
+#        track_progress 'Processed' "$wrk_dir" "$file_name" "$chunks" "$size" "$time"
+#    else
+#        track_progress 'Canceled' "$wrk_dir" "$file_name" "$chunks" "$size" "$time" "$job_response"
+#        return 1
+#    fi
+#
+#
+#    err_msg=$(catch_stderr file_move "$file_name" "$wrk_dir" "$dest_dir")
+#    [[ $? != 0 ]] && { echo "$err_msg"; return 1; }
+}
+
+
+
+
+function track_progress() {
+    local action="$1"
+    local directory="$2"
+    local file_name="$3"
+    local chunks="$4"
+    local total_size="$5"
+    local time="$6"
+    local err="$7"
+    local kb=1024; local mb=1048576; local gb=1073741824; local units=$kb; local scale="Kb"
+
+    [[ total_size -eq 0 ]] && return
+    [[ total_size -ge $mb ]] && { units=$kb; scale="Kb"; }
+    [[ total_size -ge $gb ]] && { units=$mb; scale="Mb"; }
+    [[ total_size -gt $gb ]] && { units=$gb; scale="Gb"; }
+
+    local completed_size=$(( $(eval ls -l "$directory/$file_name.{1..$chunks}" 2> /dev/null | awk 'BEGIN{s=0}{s+=$5}END{print s}') ))
+    local elapsed=$(( $(date +%s) - time ))
+    local rate=$(( ( completed_size / elapsed )/units ))
+    local pct=$(( ( completed_size*100 ) / total_size ))
+
+    local status
+    if [[ $pct -lt 100 ]]; then status="${y}Downloading${s}"; else status="${g}Completed${s}"; fi
+    if [[ $action == 'Canceled' ]]; then status="${r}FAILED${s}"; fi
+
+    local msg
+    msg+=$(printf "%-15b" "$action")
+    msg+=$(printf "%-30s" "$file_name")
+    msg+=$(printf "%6s/%-6s%s @%6s %3s/sec (%3s%%)" $((completed_size/units)) $((total_size/units)) $scale $((rate)) $scale $pct)
+    msg+=$(printf "%-25b" "......$status")
+    if [[ $action == 'Canceled' ]]; then msg+=$(printf "%40s" "[$err]"); fi
+    echo -I -n "$msg"
+
+    # end status line when download has completed
+    [[ $action == 'Processed' ]] && echo -I
+    [[ $action == 'Canceled' ]] && echo -I
 }
 
 function main {
@@ -493,10 +586,11 @@ function main {
 ###########################
 # main
 ###########################
+declare -A job_global
 ERR_FLAG=0
 # generate log file suffix as preferred
 # printf -v LOG_FILE_NAME_SUFFIX "%(%Y%m%d-%H%M%S-)T$(( RANDOM % 1000 ))" -1
-printf -v LOG_FILE_NAME_SUFFIX "%(%Y_%m_%d)T" -1
+printf -v LOG_FILE_NAME_SUFFIX "%s" $(date +%Y_%m_%d)
 
 ###########################
 # parse args
@@ -573,7 +667,7 @@ else
     else
         echo -W -e "${y}Folder-sync completed with errors${s}" #| tee -a "$LOG_FILE_NAME" 2>&1
     fi
-    rm -Rf "$OUT_DIR/.wrk" | tee -a "$LOG_FILE_NAME" 2>&1
+#    rm -Rf "$OUT_DIR/.wrk" | tee -a "$LOG_FILE_NAME" 2>&1
 fi
 
 exit 0
