@@ -1,4 +1,4 @@
-#!/usr/bin/bash
+#!/usr/bin/env zsh
 # use bash explicitly to avoid issues arround printf, declare -n, etc
 (set -o igncr) 2>/dev/null && set -o igncr; # cygwin specific shell options
 
@@ -95,8 +95,10 @@ parse_args() {
 
     local flags="kOhvqRb:s:d:u:p:m:l:L:f:"
     local long="start,stop,help,source:,dest:,user:,password:,marker:logfile:,level:,file:"
-
-    parsed=$(getopt -a -n folder_sync -o "$flags" --long "$long" -- "${cmdargs[@]}")
+     echo "******"
+    declare -p cmdargs
+    echo "cmdargs: ${cmdargs[@]}"
+    parsed=$(/usr/bin/getopt -a -n folder_sync -o "$flags" --long "$long" -- "${cmdargs[@]}")
     [[ $? -ne 0 ]] && usage
 
     eval set -- "$parsed"
@@ -365,8 +367,8 @@ function file_download() {
     }
 
     local origname=$file_name
-    [[ $file_name == 'BCDriverMerge.exe' ]] && file_name='*BCDriverMerge.exe' # just for testing
-    [[ $file_name == 'BCWim.bin' ]] && file_name='*BCWim.bin' # just for testing
+#    [[ $file_name == 'BCDriverMerge.exe' ]] && file_name='*BCDriverMerge.exe' # just for testing
+#    [[ $file_name == 'BCWim.bin' ]] && file_name='*BCWim.bin' # just for testing
     ( {
     sleep 5;
     curl --write-out "%{http_code}" -sS -R --ftp-pasv \
@@ -448,7 +450,6 @@ function dir_scan() {
     echo -D -e "Downloading the following files:"
     # shellcheck disable=SC2068  # gobbling needed here
     for f in ${files[@]}; do echo -D "$f"; done
-    # todo support for parallel download
 
     # shellcheck disable=SC2068
     for f in ${files[@]}; do
@@ -460,11 +461,11 @@ function dir_scan() {
 #    [[ $? != 0 ]] && { echo "$err_msg"; return 1; }
 
 #        if [[ $? -ne 0 ]]; then
-#            (( ERR_FLAG++))
+#            ((ERR_FLAG++))
 #            #echo -E -e "${y}Error reported when downloading file $f${s}"
 #        elif  [[ "$DELETE_REMOTE_FILE" = "y" ]]; then
 #            err_msg=$(file_remove "$USER:$PWD" "$url" "$f")
-#            [[ $? != 0 ]] && { (( ERR_FLAG++)); echo -E -e "Error reported when removing remote file $f [$err_msg]"; }
+#            [[ $? != 0 ]] && { ((ERR_FLAG++)); echo -E -e "Error reported when removing remote file $f [$err_msg]"; }
 #        fi
     done
 
@@ -477,6 +478,7 @@ function dir_scan() {
         for K in "${!sz_map[@]}"; do
             fn=$K
             fs=${sz_map[$K]}
+            # consider using watch -n 5 free -m
             track_progress "Processing" "$out/.wrk" "$fn" "1" "$fs" "$time"
             tput el
             echo
@@ -495,6 +497,7 @@ function dir_scan() {
             track_progress 'Processed' "$out/.wrk" "$fn" "1" "$fs" "$time"
             file_move "$fn" "$out/.wrk" "$out"
         else
+            ((ERR_FLAG++))
             track_progress 'Canceled' "$out/.wrk" "$fn" "1" "$fs" "$time" "$job_response"
         fi
     done
@@ -539,9 +542,6 @@ for K in "${!all_files[@]}"; do echo -D "[$K] : [${all_files[$K]}]"; done
 #    [[ $? != 0 ]] && { echo "$err_msg"; return 1; }
 }
 
-
-
-
 function track_progress() {
     local action="$1"
     local directory="$2"
@@ -550,17 +550,17 @@ function track_progress() {
     local total_size="$5"
     local time="$6"
     local err="$7"
-    local kb=1024; local mb=1048576; local gb=1073741824; local units=$kb; local scale="Kb"
+    local Kb=1024; local Mb=1048576; local Gb=1073741824; local units=$Kb; local scale="Kb"
 
     [[ total_size -eq 0 ]] && return
-    [[ total_size -ge $mb ]] && { units=$kb; scale="Kb"; }
-    [[ total_size -ge $gb ]] && { units=$mb; scale="Mb"; }
-    [[ total_size -gt $gb ]] && { units=$gb; scale="Gb"; }
+    [[ total_size -ge $Mb ]] && { units=$Kb; scale="Kb"; }
+    [[ total_size -ge $Gb ]] && { units=$Mb; scale="Mb"; }
+    [[ total_size -gt $Gb ]] && { units=$Gb; scale="Gb"; }
 
     local completed_size=$(( $(eval ls -l "$directory/$file_name.{1..$chunks}" 2> /dev/null | awk 'BEGIN{s=0}{s+=$5}END{print s}') ))
     local elapsed=$(( $(date +%s) - time ))
     local rate=$(( ( completed_size / elapsed )/units ))
-    local pct=$(( ( completed_size*100 ) / total_size ))
+    local pct=$(( ( completed_size*100 )/total_size ))
 
     local status
     if [[ $pct -lt 100 ]]; then status="${y}Downloading${s}"; else status="${g}Completed${s}"; fi
@@ -586,7 +586,6 @@ function main {
 ###########################
 # main
 ###########################
-declare -A job_global
 ERR_FLAG=0
 # generate log file suffix as preferred
 # printf -v LOG_FILE_NAME_SUFFIX "%(%Y%m%d-%H%M%S-)T$(( RANDOM % 1000 ))" -1
@@ -598,6 +597,10 @@ printf -v LOG_FILE_NAME_SUFFIX "%s" $(date +%Y_%m_%d)
 
 # shellcheck disable=SC2034
 CMD_ARGS=("$@")
+
+declare -p CMD_ARGS
+echo "cmdargs: ${CMD_ARGS[@]}"
+
 declare -A ARGS_MAP
 parse_args CMD_ARGS ARGS_MAP
 
@@ -667,7 +670,7 @@ else
     else
         echo -W -e "${y}Folder-sync completed with errors${s}" #| tee -a "$LOG_FILE_NAME" 2>&1
     fi
-#    rm -Rf "$OUT_DIR/.wrk" | tee -a "$LOG_FILE_NAME" 2>&1
+    rm -Rf "$OUT_DIR/.wrk" | tee -a "$LOG_FILE_NAME" 2>&1
 fi
 
-exit 0
+exit $ERR_FLAG
