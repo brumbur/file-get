@@ -673,4 +673,3 @@ else
     rm -Rf "$OUT_DIR/.wrk" | tee -a "$LOG_FILE_NAME" 2>&1
 fi
 
-exit $ERR_FLAG
