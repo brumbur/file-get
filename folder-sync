@@ -1,4 +1,4 @@
-#!/usr/bin/env zsh
+#!/usr/bin/env bash
 # use bash explicitly to avoid issues arround printf, declare -n, etc
 (set -o igncr) 2>/dev/null && set -o igncr; # cygwin specific shell options
 
@@ -90,15 +90,14 @@ function help {
 # shellcheck disable=SC2153
 # shellcheck disable=SC2034
 parse_args() {
-    declare -n cmdargs=$1
-    declare -n argsmap=$2
+    local -n cmdargs=$1
+    local -n argsmap=$2
 
     local flags="kOhvqRb:s:d:u:p:m:l:L:f:"
     local long="start,stop,help,source:,dest:,user:,password:,marker:logfile:,level:,file:"
-     echo "******"
-    declare -p cmdargs
-    echo "cmdargs: ${cmdargs[@]}"
+
     parsed=$(/usr/bin/getopt -a -n folder_sync -o "$flags" --long "$long" -- "${cmdargs[@]}")
+    declare -p parsed
     [[ $? -ne 0 ]] && usage
 
     eval set -- "$parsed"
@@ -366,13 +365,13 @@ function file_download() {
         exit;
     }
 
-    local origname=$file_name
+#    local origname=$file_name
 #    [[ $file_name == 'BCDriverMerge.exe' ]] && file_name='*BCDriverMerge.exe' # just for testing
 #    [[ $file_name == 'BCWim.bin' ]] && file_name='*BCWim.bin' # just for testing
     ( {
     sleep 5;
     curl --write-out "%{http_code}" -sS -R --ftp-pasv \
-        -u "$USER:$PWD" -o "${wrk_dir}/${file_name}.1" "$src_dir/$file_name" >/dev/shm/$origname  2>&1; } ) &
+        -u "$USER:$PWD" -o "${wrk_dir}/${file_name}.1" "$src_dir/$file_name" >/dev/shm/"$file_name" 2>&1; } ) &
 
 #    wait_for_completion "Processing" "$wrk_dir" "$file_name" $chunks "$size"
 }
@@ -445,7 +444,7 @@ function dir_scan() {
 
     filter_filename files "${ARGS_MAP[FILE]:-.*}"
 
-    [[ -n "${files[*]}" ]] || { echo -W -e "No new files"; eturn 0; }
+    [[ -n "${files[*]}" ]] || { echo -W -e "No new files"; return 0; }
 
     echo -D -e "Downloading the following files:"
     # shellcheck disable=SC2068  # gobbling needed here
@@ -457,16 +456,16 @@ function dir_scan() {
         sz_map[$f]=$size
         file_download "$url" "$out" "$f" "$size"
 
-#    err_msg=$(catch_stderr file_move "$file_name" "$wrk_dir" "$dest_dir")
-#    [[ $? != 0 ]] && { echo "$err_msg"; return 1; }
+    err_msg=$(catch_stderr file_move "$file_name" "$wrk_dir" "$dest_dir")
+    [[ $? != 0 ]] && { echo "$err_msg"; return 1; }
 
-#        if [[ $? -ne 0 ]]; then
-#            ((ERR_FLAG++))
-#            #echo -E -e "${y}Error reported when downloading file $f${s}"
-#        elif  [[ "$DELETE_REMOTE_FILE" = "y" ]]; then
-#            err_msg=$(file_remove "$USER:$PWD" "$url" "$f")
-#            [[ $? != 0 ]] && { ((ERR_FLAG++)); echo -E -e "Error reported when removing remote file $f [$err_msg]"; }
-#        fi
+        if [[ $? -ne 0 ]]; then
+            ((ERR_FLAG++))
+            #echo -E -e "${y}Error reported when downloading file $f${s}"
+        elif  [[ "$DELETE_REMOTE_FILE" = "y" ]]; then
+            err_msg=$(file_remove "$USER:$PWD" "$url" "$f")
+            [[ $? != 0 ]] && { ((ERR_FLAG++)); echo -E -e "Error reported when removing remote file $f [$err_msg]"; }
+        fi
     done
 
     # Wait for the job to complete while showing progress
@@ -491,7 +490,7 @@ function dir_scan() {
     for K in "${!sz_map[@]}"; do
         fn=$K
         fs=${sz_map[$K]}
-        read -r job_response < /dev/shm/$fn # get the job actual output
+        read -r job_response < /dev/shm/"$fn" # get the job actual output
 
         if [[ "$job_response" == '' ]] || [[ "$job_response" =~ '226' ]]; then
             track_progress 'Processed' "$out/.wrk" "$fn" "1" "$fs" "$time"
@@ -512,6 +511,7 @@ function wait_for_all() {
     local -a all_files=$6
     declare -A sz_map
 
+    # shellcheck disable=SC2068
     for f in ${all_files[@]}; do
         sz_map[f]=$(wc -c "$directory/$f" | cut -d ' ' -f 1)
     done
@@ -589,7 +589,7 @@ function main {
 ERR_FLAG=0
 # generate log file suffix as preferred
 # printf -v LOG_FILE_NAME_SUFFIX "%(%Y%m%d-%H%M%S-)T$(( RANDOM % 1000 ))" -1
-printf -v LOG_FILE_NAME_SUFFIX "%s" $(date +%Y_%m_%d)
+printf -v LOG_FILE_NAME_SUFFIX "%s" "$(date +%Y_%m_%d)"
 
 ###########################
 # parse args
@@ -599,8 +599,7 @@ printf -v LOG_FILE_NAME_SUFFIX "%s" $(date +%Y_%m_%d)
 CMD_ARGS=("$@")
 
 declare -p CMD_ARGS
-echo "cmdargs: ${CMD_ARGS[@]}"
-
+#echo "cmdargs: ${CMD_ARGS[@]}"
 declare -A ARGS_MAP
 parse_args CMD_ARGS ARGS_MAP
 
@@ -619,7 +618,7 @@ LOGS_ROOT="$OUT_DIR/.log" && mkdir -p "$LOGS_ROOT"
 LOG_FILE_NAME=${ARGS_MAP[LOG]:-"${LOGS_ROOT}/folder-sync.${LOG_FILE_NAME_SUFFIX}.log"}
 LEVEL=${ARGS_MAP[LEVEL]:-3}
 
-for K in "${!ARGS_MAP[@]}"; do echo -D "[$K] : [${ARGS_MAP[$K]}]"; done
+#for K in "${!ARGS_MAP[@]}"; do echo -D "[$K] : [${ARGS_MAP[$K]}]"; done
 
 URL="${ARGS_MAP[URL]}"
 USER="${ARGS_MAP[USER]}"
